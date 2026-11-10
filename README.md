@@ -2,7 +2,7 @@
 
 > **Persistent Incident Memory & Autonomous Production Intelligence for SRE Teams**
 
-RecallOps-AI bridges the gap between stateless AI triage and long-term production resilience. Instead of analyzing outages in isolation, RecallOps-AI maintains an **episodic vector memory** of historical failures, applies **graph-based blast radius traversal**, and dynamically prioritizes incoming telemetry via a **multi-factor max-heap triage queue**.
+RecallOps-AI bridges the gap between stateless AI triage and long-term production resilience. Instead of analyzing outages in isolation, RecallOps-AI maintains **persistent episodic memory** backed by a durable relational database, applies **graph-based blast radius traversal**, and dynamically prioritizes incoming telemetry via a **multi-factor max-heap triage queue**.
 
 ---
 
@@ -10,11 +10,47 @@ RecallOps-AI bridges the gap between stateless AI triage and long-term productio
 
 | Core Concept | Implementation in RecallOps-AI |
 | :--- | :--- |
-| **1. Data Structures & Algorithms** | • **Vector Index & Cosine Similarity ($k$-NN):** Sub-linear similarity search across historical incidents.<br>• **Priority Queue (Max-Heap):** Multivariate urgency scoring based on Severity, Service Tier, and User Impact.<br>• **Directed Acyclic Graph (DAG):** Downstream BFS blast-radius propagation and DFS cycle detection.<br>• **Prefix Trie:** $\mathcal{O}(L)$ log tokenization and error signature categorization. |
-| **2. API Integration** | • **FastAPI REST Endpoints:** Modular `/api/v1/` routes with dependency injection.<br>• **Webhook Ingestion:** Normalizes alerts from PagerDuty, Datadog, Prometheus, Grafana.<br>• **Database Layer:** SQLAlchemy ORM models with SQLite/PostgreSQL persistence. |
-| **3. Prototyping** | • **Working End-to-End MVP:** Ingestion $\rightarrow$ Triage $\rightarrow$ Memory Recall $\rightarrow$ Diagnosis $\rightarrow$ Resolution Feedback.<br>• **Pre-seeded Incident History:** Out-of-the-box knowledge base of common production failure modes. |
-| **4. Testing & Validation** | • **20 Automated Tests:** Unit tests for DSA, schema validations, and full API lifecycle tests with `pytest`.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
-| **5. Technical Documentation** | • **System Design:** Detailed architectural documentation and mathematical formulas in `docs/SYSTEM_DESIGN.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
+| **1. Data Structures & Algorithms** | • **Vector Index & Cosine Similarity ($k$-NN):** In-memory TF-IDF sparse vector retrieval with thread-safe `RLock` synchronization.<br>• **Priority Queue (Max-Heap):** Dynamic triage prioritizing alerts by Severity, Service Tier, and User Impact.<br>• **Directed Acyclic Graph (DAG):** Downstream BFS blast-radius propagation and DFS cycle detection.<br>• **Prefix Trie:** $\mathcal{O}(L)$ log tokenization and error signature categorization. |
+| **2. API Integration** | • **FastAPI REST Endpoints:** Modular `/api/v1/` routes with dependency injection.<br>• **Webhook Ingestion:** Normalizes alerts from PagerDuty, Datadog, Prometheus, Grafana.<br>• **Durable Persistence:** SQLAlchemy ORM models with SQLite/PostgreSQL persistence and transactional rollback guarantees. |
+| **3. Prototyping** | • **Persistent Episodic Memory Lifecycle:** Ingestion $\rightarrow$ Triage $\rightarrow$ Memory Recall $\rightarrow$ Diagnosis $\rightarrow$ Verified Resolution $\rightarrow$ Database Persistence $\rightarrow$ Startup Rehydration.<br>• **Database-Driven Memory Seeding:** Grounded historical outages persisted in relational storage, not volatile RAM. |
+| **4. Testing & Validation** | • **28 Automated Tests:** Full test suite covering persistence across server restarts, service recreation, duplicate handling, database failure handling, DSA, schemas, and lifecycle APIs.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
+| **5. Technical Documentation** | • **System Design:** Detailed architectural documentation, database persistence vs in-memory index design in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Comprehensive gap analysis and vulnerability review in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
+
+---
+
+## 🧠 Persistent Episodic Memory Architecture
+
+RecallOps-AI cleanly separates **durable relational persistence** from the **in-memory vector search index**:
+
+```
++--------------------------------------------------------------------------+
+|                        DURABLE PERSISTENCE LAYER                         |
+|                    (SQLAlchemy ORM + SQLite/PostgreSQL)                  |
+|                                                                          |
+|  - Table: `incidents` (title, description, service_name, raw_logs)       |
+|  - Table: `incident_resolutions` (root_cause, action_taken, verified_by) |
+|  - ACID Guarantees: Transactional rollbacks on failure                   |
+|  - Source of Truth: Survives process restarts, crashes, deployments      |
++--------------------------------------------------------------------------+
+                                     |
+               Startup Rehydration   |   Verified Resolution
+             (rehydrate_from_db)     |   (record_resolution)
+                                     v
++--------------------------------------------------------------------------+
+|                       EPISODIC IN-MEMORY SEARCH INDEX                    |
+|                        (EpisodicMemoryIndex in RAM)                      |
+|                                                                          |
+|  - Structure: Sparse TF-IDF token dictionary + precomputed vector norms  |
+|  - Retrieval: Cosine Similarity k-NN ranking via min-heap               |
+|  - Synchronization: Thread-safe via threading.RLock                     |
+|  - Lifecycle: Ephemeral; rebuilt from verified database records on start |
++--------------------------------------------------------------------------+
+```
+
+1. **Transactional Durability:** When an incident is resolved with verified notes (`verified_by`), it is atomically written to the relational database.
+2. **Startup Rehydration:** On application start (`lifespan`), `EpisodicMemoryService.rehydrate_from_db()` queries all verified resolutions and re-indexes them into RAM.
+3. **Verified Knowledge Only:** Speculative or unverified triage notes are rejected by the memory index, preventing hallucinated fixes from polluting historical memory.
+4. **Duplicate Protection:** Re-resolving an incident updates the existing database record in place and updates the memory index cleanly without inflating document counts.
 
 ---
 
@@ -45,16 +81,17 @@ Open **[http://localhost:8000/docs](http://localhost:8000/docs)** to view the in
 
 ## 🧪 Running the Test Suite
 
-Run the full automated test suite (20 tests covering algorithms, API endpoints, and schemas):
+Run the full automated test suite (28 tests):
 
 ```powershell
 pytest -v
 ```
 
 **Test Breakdown:**
+* `backend/tests/test_persistent_memory.py`: 8 tests (Verified additions, service recreation, restart persistence across temporary database, unverified rejection, duplicate resolution protection, multiple record rehydration, empty memory retrieval, database failure handling).
 * `backend/tests/test_algorithms.py`: 8 tests (Vector similarity, Priority queue, Graph blast radius, Cycle detection, Error Trie).
-* `backend/tests/test_health.py`: 2 tests (System health and metadata).
-* `backend/tests/test_incidents_api.py`: 6 tests (Ingestion, Webhooks, Triage, AI Diagnosis, Resolution feedback loop).
+* `backend/tests/test_health.py`: 2 tests (System health, degraded state detection, and metadata).
+* `backend/tests/test_incidents_api.py`: 6 tests (Ingestion, Webhooks, Triage, AI Diagnosis, Resolution feedback loop, Topology).
 * `backend/tests/test_schemas.py`: 4 tests (Schema boundaries and validation constraints).
 
 ---
@@ -67,49 +104,38 @@ RecallOps-AI/
 │   ├── app/
 │   │   ├── api/v1/
 │   │   │   ├── endpoints/
-│   │   │   │   ├── health.py        # Healthcheck endpoint
-│   │   │   │   └── incidents.py     # Ingestion, Triage, Diagnosis, Resolution
-│   │   │   └── router.py            # API V1 router aggregation
+│   │   │   │   ├── health.py              # Healthcheck & degraded status reporting
+│   │   │   │   └── incidents.py           # Ingestion, Triage, Diagnosis, Resolution
+│   │   │   └── router.py                  # API V1 router aggregation
 │   │   ├── core/
-│   │   │   ├── algorithms.py        # DSA: VectorIndex, Max-Heap, DAG, Trie
-│   │   │   └── config.py            # Application settings (Pydantic Settings)
+│   │   │   ├── algorithms.py              # DSA: VectorIndex, Max-Heap, DAG, Trie (Thread-safe)
+│   │   │   └── config.py                  # Application settings (Pydantic Settings)
 │   │   ├── db/
-│   │   │   ├── base.py              # DeclarativeBase
-│   │   │   └── session.py           # SQLAlchemy session engine
+│   │   │   ├── base.py                    # DeclarativeBase
+│   │   │   └── session.py                 # SQLAlchemy session engine
 │   │   ├── models/
-│   │   │   └── incident.py          # Incident & Resolution ORM models
+│   │   │   └── incident.py                # Incident & Resolution ORM models
 │   │   ├── repositories/
-│   │   │   └── incident_repository.py # Data access layer
+│   │   │   └── incident_repository.py     # Transactional data access layer
 │   │   ├── schemas/
-│   │   │   └── incident.py          # Pydantic V2 schemas
+│   │   │   └── incident.py                # Pydantic V2 schemas
 │   │   ├── services/
-│   │   │   ├── ai_agent_service.py  # Diagnostic & Runbook reasoning agent
-│   │   │   ├── memory_service.py    # Episodic memory management
-│   │   │   ├── topology_service.py  # Microservice dependency graph
-│   │   │   └── triage_service.py    # Dynamic priority triage queue
-│   │   └── main.py                  # FastAPI application entrypoint
+│   │   │   ├── ai_agent_service.py        # Diagnostic & Runbook reasoning agent
+│   │   │   ├── memory_service.py          # Persistent episodic memory manager
+│   │   │   ├── topology_service.py        # Microservice dependency graph
+│   │   │   └── triage_service.py          # Dynamic priority triage queue
+│   │   └── main.py                        # FastAPI app & database startup rehydration
 │   ├── tests/
-│   │   ├── test_algorithms.py       # DSA unit tests
-│   │   ├── test_health.py           # Health endpoint tests
-│   │   ├── test_incidents_api.py    # Lifecycle integration tests
-│   │   └── test_schemas.py          # Pydantic boundary validation tests
-│   └── requirements.txt             # Project dependencies
+│   │   ├── test_persistent_memory.py      # Persistence & rehydration test suite
+│   │   ├── test_algorithms.py             # DSA unit tests
+│   │   ├── test_health.py                 # Health endpoint tests
+│   │   ├── test_incidents_api.py          # Lifecycle integration tests
+│   │   └── test_schemas.py                # Pydantic boundary validation tests
+│   └── requirements.txt                   # Project dependencies
 ├── docs/
-│   ├── SYSTEM_DESIGN.md             # In-depth architectural blueprint
-│   └── API_REFERENCE.md             # API specifications & curl examples
-├── pytest.ini                       # Test runner configuration
-└── README.md                        # Project documentation
+│   ├── SYSTEM_DESIGN.md                   # In-depth architectural blueprint
+│   ├── IMPLEMENTATION_AUDIT.md            # Comprehensive audit & risk review
+│   └── API_REFERENCE.md                   # API specifications & curl examples
+├── pytest.ini                             # Test runner configuration
+└── README.md                              # Project documentation
 ```
-
----
-
-## 💡 Real-World Workflow Example
-
-1. **Alert Ingestion:** Datadog fires a webhook indicating `[payment-service] HighErrorRate`.
-2. **Dynamic Triage:** System calculates priority score based on severity (CRITICAL) and tier (TIER_0), placing it at the front of the queue.
-3. **AI Diagnosis & Memory Recall:**
-   * Trie matches `[ERR_504]` and `dns_timeout`.
-   * Graph traces blast radius: `checkout-web` and `api-gateway` are impacted.
-   * Vector Index recalls incident `HIST-003` (CoreDNS `ndots:5` timeout) with 81% confidence.
-4. **Actionable Runbook:** Agent recommends applying `dnsConfig ndots:2` and warns against pod restarting anti-patterns.
-5. **Continuous Learning:** When SRE resolves the incident, the verified solution is indexed into memory, permanently preventing future guesswork.

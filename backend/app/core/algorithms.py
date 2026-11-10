@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import re
 import heapq
+import threading
 from collections import defaultdict, deque
 from typing import List, Dict, Tuple, Set, Any, Optional
 
@@ -23,15 +24,27 @@ class EpisodicMemoryIndex:
     """
     In-memory vector space model implementing TF-IDF tokenization and
     Cosine Similarity k-NN retrieval for fast historical incident recall.
+    Synchronized with a re-entrant lock (RLock) for concurrent access.
     """
 
     def __init__(self):
+        self._lock = threading.RLock()
         self.documents: Dict[str, Dict[str, Any]] = {}
         self.doc_vectors: Dict[str, Dict[str, float]] = {}
         self.doc_magnitudes: Dict[str, float] = {}
         self.idf: Dict[str, float] = {}
         self.df: Dict[str, int] = defaultdict(int)
         self.total_docs: int = 0
+
+    def clear(self) -> None:
+        """Resets the vector index and document collection completely."""
+        with self._lock:
+            self.documents.clear()
+            self.doc_vectors.clear()
+            self.doc_magnitudes.clear()
+            self.idf.clear()
+            self.df.clear()
+            self.total_docs = 0
 
     def _tokenize(self, text: str) -> List[str]:
         """Normalize and tokenize log/incident text."""
@@ -69,20 +82,31 @@ class EpisodicMemoryIndex:
 
     def add_document(self, doc_id: str, text: str, metadata: Dict[str, Any]) -> None:
         """Indexes an incident text into the vector memory space."""
-        tokens = self._tokenize(text)
-        unique_terms = set(tokens)
-        
-        # Update document frequencies
-        for term in unique_terms:
-            self.df[term] += 1
+        with self._lock:
+            tokens = self._tokenize(text)
+            unique_terms = set(tokens)
+            
+            # If doc_id already exists, cleanly remove previous document term frequencies
+            # to prevent duplicate counting and artificial IDF inflation
+            if doc_id in self.documents:
+                old_tokens = set(self.documents[doc_id]["tokens"])
+                for term in old_tokens:
+                    if self.df[term] > 1:
+                        self.df[term] -= 1
+                    else:
+                        self.df.pop(term, None)
+                self.total_docs -= 1
 
-        self.documents[doc_id] = {
-            "text": text,
-            "tokens": tokens,
-            "metadata": metadata
-        }
-        self.total_docs += 1
-        self._recalculate_idf()
+            for term in unique_terms:
+                self.df[term] += 1
+
+            self.documents[doc_id] = {
+                "text": text,
+                "tokens": tokens,
+                "metadata": metadata
+            }
+            self.total_docs += 1
+            self._recalculate_idf()
 
     def cosine_similarity(self, vec_a: Dict[str, float], mag_a: float,
                           vec_b: Dict[str, float], mag_b: float) -> float:
@@ -98,52 +122,54 @@ class EpisodicMemoryIndex:
             vec_a, vec_b = vec_b, vec_a
 
         dot_product = sum(val * vec_b.get(term, 0.0) for term, val in vec_a.items())
-        return dot_product / (mag_a * mag_b)
+        raw_score = dot_product / (mag_a * mag_b)
+        return min(1.0, max(0.0, raw_score))
 
     def search_similar(self, query_text: str, top_k: int = 3, threshold: float = 0.05) -> List[Dict[str, Any]]:
         """
         Retrieves the top-k most similar incidents using k-NN with a min-heap.
         Time Complexity: O(N * |Q| + N log k)
         """
-        query_tokens = self._tokenize(query_text)
-        if not query_tokens or self.total_docs == 0:
-            return []
+        with self._lock:
+            query_tokens = self._tokenize(query_text)
+            if not query_tokens or self.total_docs == 0:
+                return []
 
-        query_tf = self._compute_tf(query_tokens)
-        query_vec: Dict[str, float] = {}
-        squared_sum = 0.0
-        for term, tf_val in query_tf.items():
-            tfidf_val = tf_val * self.idf.get(term, 1.0)
-            query_vec[term] = tfidf_val
-            squared_sum += tfidf_val * tfidf_val
+            query_tf = self._compute_tf(query_tokens)
+            query_vec: Dict[str, float] = {}
+            squared_sum = 0.0
+            for term, tf_val in query_tf.items():
+                tfidf_val = tf_val * self.idf.get(term, 1.0)
+                query_vec[term] = tfidf_val
+                squared_sum += tfidf_val * tfidf_val
 
-        query_mag = math.sqrt(squared_sum) or 1.0
+            query_mag = math.sqrt(squared_sum) or 1.0
 
-        # Min-heap to maintain top-k elements: elements stored as (score, doc_id)
-        heap: List[Tuple[float, str]] = []
+            # Min-heap to maintain top-k elements: elements stored as (score, doc_id)
+            heap: List[Tuple[float, str]] = []
 
-        for doc_id, doc_vec in self.doc_vectors.items():
-            doc_mag = self.doc_magnitudes[doc_id]
-            score = self.cosine_similarity(query_vec, query_mag, doc_vec, doc_mag)
-            
-            if score >= threshold:
-                if len(heap) < top_k:
-                    heapq.heappush(heap, (score, doc_id))
-                elif score > heap[0][0]:
-                    heapq.heapreplace(heap, (score, doc_id))
+            for doc_id, doc_vec in self.doc_vectors.items():
+                doc_mag = self.doc_magnitudes[doc_id]
+                score = self.cosine_similarity(query_vec, query_mag, doc_vec, doc_mag)
+                
+                if score >= threshold:
+                    if len(heap) < top_k:
+                        heapq.heappush(heap, (score, doc_id))
+                    elif score > heap[0][0]:
+                        heapq.heapreplace(heap, (score, doc_id))
 
-        # Sort descending by score
-        results = []
-        for score, doc_id in sorted(heap, key=lambda x: x[0], reverse=True):
-            doc_info = self.documents[doc_id]
-            results.append({
-                "incident_id": doc_id,
-                "similarity_score": round(score, 4),
-                "text": doc_info["text"],
-                "metadata": doc_info["metadata"]
-            })
+            # Sort descending by score
+            results = []
+            for score, doc_id in sorted(heap, key=lambda x: x[0], reverse=True):
+                doc_info = self.documents[doc_id]
+                results.append({
+                    "incident_id": doc_id,
+                    "similarity_score": round(score, 4),
+                    "text": doc_info["text"],
+                    "metadata": doc_info["metadata"]
+                })
 
-        return results
+            return results
 
 
 # ============================================================================
@@ -186,61 +212,68 @@ class TriageItem:
 
 
 class PriorityTriageQueue:
-    """Thread-safe max-heap queue for active incident triage."""
+    """Thread-safe max-heap queue for active incident triage synchronized with RLock."""
 
     def __init__(self):
+        self._lock = threading.RLock()
         self._heap: List[TriageItem] = []
         self._entry_map: Dict[str, TriageItem] = {}
 
     def push(self, incident_id: str, title: str, severity: str,
              service_tier: str, impacted_users: int, timestamp: float) -> TriageItem:
-        item = TriageItem(incident_id, title, severity, service_tier, impacted_users, timestamp)
-        heapq.heappush(self._heap, item)
-        self._entry_map[incident_id] = item
-        return item
+        with self._lock:
+            item = TriageItem(incident_id, title, severity, service_tier, impacted_users, timestamp)
+            heapq.heappush(self._heap, item)
+            self._entry_map[incident_id] = item
+            return item
 
     def pop(self) -> Optional[TriageItem]:
-        while self._heap:
-            item = heapq.heappop(self._heap)
-            if item.incident_id in self._entry_map:
-                del self._entry_map[item.incident_id]
-                return item
-        return None
+        with self._lock:
+            while self._heap:
+                item = heapq.heappop(self._heap)
+                if item.incident_id in self._entry_map:
+                    del self._entry_map[item.incident_id]
+                    return item
+            return None
 
     def peek(self) -> Optional[TriageItem]:
-        while self._heap:
-            item = self._heap[0]
-            if item.incident_id in self._entry_map:
-                return item
-            heapq.heappop(self._heap)
-        return None
+        with self._lock:
+            while self._heap:
+                item = self._heap[0]
+                if item.incident_id in self._entry_map:
+                    return item
+                heapq.heappop(self._heap)
+            return None
 
     def remove(self, incident_id: str) -> bool:
         """Soft-removes an incident when resolved or acknowledged."""
-        if incident_id in self._entry_map:
-            del self._entry_map[incident_id]
-            return True
-        return False
+        with self._lock:
+            if incident_id in self._entry_map:
+                del self._entry_map[incident_id]
+                return True
+            return False
 
     def list_all_sorted(self) -> List[Dict[str, Any]]:
         """Returns all items currently in queue sorted by highest priority."""
-        valid_items = [item for item in self._heap if item.incident_id in self._entry_map]
-        sorted_items = sorted(valid_items, key=lambda x: (x.score, -x.timestamp), reverse=True)
-        return [
-            {
-                "incident_id": it.incident_id,
-                "title": it.title,
-                "severity": it.severity,
-                "service_tier": it.service_tier,
-                "impacted_users": it.impacted_users,
-                "score": it.score,
-                "timestamp": it.timestamp
-            }
-            for it in sorted_items
-        ]
+        with self._lock:
+            valid_items = [item for item in self._heap if item.incident_id in self._entry_map]
+            sorted_items = sorted(valid_items, key=lambda x: (x.score, -x.timestamp), reverse=True)
+            return [
+                {
+                    "incident_id": it.incident_id,
+                    "title": it.title,
+                    "severity": it.severity,
+                    "service_tier": it.service_tier,
+                    "impacted_users": it.impacted_users,
+                    "score": it.score,
+                    "timestamp": it.timestamp
+                }
+                for it in sorted_items
+            ]
 
     def size(self) -> int:
-        return len(self._entry_map)
+        with self._lock:
+            return len(self._entry_map)
 
 
 # ============================================================================

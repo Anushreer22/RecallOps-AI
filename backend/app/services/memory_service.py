@@ -1,94 +1,135 @@
+import threading
 from typing import List, Dict, Any, Optional
+from sqlalchemy.orm import Session
 from backend.app.core.algorithms import EpisodicMemoryIndex
+from backend.app.repositories.incident_repository import IncidentRepository
+
 
 class EpisodicMemoryService:
-    """Manages indexing and recall of historical post-mortems and resolutions."""
+    """
+    Manages episodic memory for production incidents.
+    Bridges durable database persistence (SQLAlchemy) with in-memory
+    sparse vector TF-IDF retrieval (EpisodicMemoryIndex).
+    """
 
-    def __init__(self):
-        self.index = EpisodicMemoryIndex()
-        self._seed_historical_outages()
+    def __init__(self, index: Optional[EpisodicMemoryIndex] = None):
+        self.index = index or EpisodicMemoryIndex()
+        self._lock = threading.RLock()
+        self.is_ready: bool = False
+        self.last_error: Optional[str] = None
 
-    def _seed_historical_outages(self):
-        """Seed realistic SRE incidents into episodic memory for instant retrieval."""
-        seed_data = [
-            {
-                "id": "HIST-001",
-                "text": "PostgreSQL connection pool exhaustion under high traffic load in auth-service. Error: remaining connection slots are reserved. Callers received 500 internal server errors.",
-                "metadata": {
-                    "title": "Database connection pool saturated in auth-service",
-                    "service": "auth-service",
-                    "root_cause": "Unclosed SQLAlchemy db sessions in JWT verification middleware led to idle connection leak.",
-                    "verified_fix": "Applied context manager 'with get_db() as db' and configured PgBouncer connection pooler with max_client_conn=500.",
-                    "caution_notes": "Do not simply increase max_connections on Postgres without PgBouncer, as it will cause OOM on the database primary."
-                }
-            },
-            {
-                "id": "HIST-002",
-                "text": "Redis OOM command not allowed when used memory > maxmemory. Session cache eviction storm caused high database CPU spike.",
-                "metadata": {
-                    "title": "Redis out-of-memory cache eviction collapse",
-                    "service": "redis-session-cache",
-                    "root_cause": "User sessions created without an explicit TTL, accumulating stale session keys indefinitely until memory saturated.",
-                    "verified_fix": "Configured maxmemory-policy volatile-lru, applied default 24h TTL on all session keys, and flushed expired keys via cron.",
-                    "caution_notes": "Do not use 'KEYS *' to debug Redis memory in production, use 'SCAN' with count limit."
-                }
-            },
-            {
-                "id": "HIST-003",
-                "text": "Kubernetes CoreDNS resolution timeout 504 gateway error in payment-service. Upstream external payment provider DNS queries failing intermittently.",
-                "metadata": {
-                    "title": "CoreDNS timeout during external API resolution",
-                    "service": "payment-service",
-                    "root_cause": "Default k8s resolv.conf ndots:5 caused 5 internal domain lookups before querying public DNS, causing CoreDNS query spikes and timeouts.",
-                    "verified_fix": "Appended trailing dot '.' to external API hostnames and set dnsConfig with ndots:2 and single-request-reopen.",
-                    "caution_notes": "Restarting CoreDNS pods only provides temporary relief; dnsConfig is the permanent solution."
-                }
-            },
-            {
-                "id": "HIST-004",
-                "text": "Checkout payment gateway HTTP 429 Too Many Requests rate limit breach. Payment provider blocked checkout transactions for 15 minutes.",
-                "metadata": {
-                    "title": "Third-party payment provider rate limit throttle",
-                    "service": "payment-service",
-                    "root_cause": "Payment provider lowered API rate limit from 500 req/sec to 150 req/sec without prior deprecation notice.",
-                    "verified_fix": "Implemented client-side token bucket rate limiter with jittered exponential backoff and graceful request queueing.",
-                    "caution_notes": "Do not retry failed 429 requests immediately; it exacerbates provider throttling."
-                }
-            },
-            {
-                "id": "HIST-005",
-                "text": "Kafka consumer group partition rebalance storm causing extreme message processing lag in notification-service.",
-                "metadata": {
-                    "title": "Kafka partition rebalancing storm",
-                    "service": "notification-service",
-                    "root_cause": "Synchronous email delivery exceeded max.poll.interval.ms (300s), causing broker to consider consumer dead and trigger rebalances.",
-                    "verified_fix": "Decoupled message consumption from processing via internal async worker threadpool and increased max.poll.interval.ms to 600s.",
-                    "caution_notes": "Avoid long synchronous network calls directly inside the Kafka message poll loop."
-                }
-            }
-        ]
+    def rehydrate_from_db(self, db: Session) -> int:
+        """
+        Loads verified historical resolutions from the database and rebuilds the index.
+        If no historical records exist, initializes an empty index cleanly.
+        Returns the count of verified indexed records.
+        """
+        with self._lock:
+            try:
+                repo = IncidentRepository(db)
+                resolved_incidents = repo.get_all_resolved()
+                self.index.clear()
+                count = 0
 
-        for item in seed_data:
-            self.index.add_document(item["id"], item["text"], item["metadata"])
+                for inc in resolved_incidents:
+                    # Guard: Must have an associated resolution
+                    if not inc.resolution:
+                        continue
+                    
+                    # Guard: Resolution must be verified by an SRE/engineer
+                    if not inc.resolution.verified_by or not inc.resolution.root_cause:
+                        continue
+
+                    combined_text = (
+                        f"{inc.title} {inc.description} "
+                        f"Service: {inc.service_name} "
+                        f"Logs: {inc.raw_logs or ''} "
+                        f"Root cause: {inc.resolution.root_cause} "
+                        f"Action: {inc.resolution.action_taken} "
+                        f"Prevention: {inc.resolution.prevention_steps or ''}"
+                    )
+                    metadata = {
+                        "title": inc.title,
+                        "service": inc.service_name,
+                        "root_cause": inc.resolution.root_cause,
+                        "verified_fix": inc.resolution.action_taken,
+                        "caution_notes": inc.resolution.prevention_steps,
+                        "verified_by": inc.resolution.verified_by,
+                        "resolved_at": inc.resolution.resolved_at.isoformat() if inc.resolution.resolved_at else None
+                    }
+                    self.index.add_document(inc.id, combined_text, metadata)
+                    count += 1
+
+                self.is_ready = True
+                self.last_error = None
+                return count
+            except Exception as e:
+                self.is_ready = False
+                self.last_error = str(e)
+                raise
 
     def recall(self, query_text: str, top_k: int = 3, threshold: float = 0.05) -> List[Dict[str, Any]]:
-        return self.index.search_similar(query_text, top_k=top_k, threshold=threshold)
+        """
+        Queries episodic memory for similar historical outages.
+        Safely returns empty list for blank queries or empty memory index.
+        """
+        with self._lock:
+            if not query_text or not query_text.strip():
+                return []
+            if self.index.total_docs == 0:
+                return []
+            return self.index.search_similar(query_text, top_k=top_k, threshold=threshold)
 
-    def record_resolution(self, incident_id: str, title: str, description: str,
-                          root_cause: str, action_taken: str, prevention_steps: Optional[str] = None) -> None:
-        """Stores a newly verified resolution into the vector episodic memory."""
-        combined_text = f"{title} {description} Root cause: {root_cause} Action: {action_taken} Prevention: {prevention_steps or ''}"
-        metadata = {
-            "title": title,
-            "service": "production",
-            "root_cause": root_cause,
-            "verified_fix": action_taken,
-            "caution_notes": prevention_steps
-        }
-        self.index.add_document(incident_id, combined_text, metadata)
+    def record_resolution(
+        self,
+        incident_id: str,
+        title: str,
+        description: str,
+        service_name: str,
+        root_cause: str,
+        action_taken: str,
+        prevention_steps: Optional[str] = None,
+        raw_logs: Optional[str] = None,
+        verified_by: Optional[str] = None
+    ) -> bool:
+        """
+        Indexes a verified resolution into the episodic vector memory.
+        Rejects unverified resolutions (verified_by is required).
+        Returns True if indexed, False if rejected as unverified.
+        """
+        with self._lock:
+            # Guard: Never save unverified AI diagnoses or unverified resolutions
+            if not verified_by or not verified_by.strip():
+                return False
+
+            combined_text = (
+                f"{title} {description} "
+                f"Service: {service_name} "
+                f"Logs: {raw_logs or ''} "
+                f"Root cause: {root_cause} "
+                f"Action: {action_taken} "
+                f"Prevention: {prevention_steps or ''}"
+            )
+            metadata = {
+                "title": title,
+                "service": service_name,
+                "root_cause": root_cause,
+                "verified_fix": action_taken,
+                "caution_notes": prevention_steps,
+                "verified_by": verified_by
+            }
+            self.index.add_document(incident_id, combined_text, metadata)
+            return True
 
     def count(self) -> int:
-        return self.index.total_docs
+        with self._lock:
+            return self.index.total_docs
+
+    def clear(self) -> None:
+        with self._lock:
+            self.index.clear()
+            self.is_ready = False
+            self.last_error = None
 
 
 # Global shared instance

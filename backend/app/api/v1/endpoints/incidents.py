@@ -171,16 +171,19 @@ def resolve_incident(incident_id: str, resolution_in: ResolutionCreate, db: Sess
     # Remove from priority queue
     triage_service.remove(incident_id)
 
-    # Re-index into episodic memory for future recall
+    # Re-index into episodic memory for future recall (only if verified)
     incident = repo.get_by_id(incident_id)
-    if incident:
+    if incident and resolution.verified_by:
         memory_service.record_resolution(
             incident_id=incident.id,
             title=incident.title,
             description=incident.description,
-            root_cause=resolution_in.root_cause,
-            action_taken=resolution_in.action_taken,
-            prevention_steps=resolution_in.prevention_steps
+            service_name=incident.service_name,
+            root_cause=resolution.root_cause,
+            action_taken=resolution.action_taken,
+            prevention_steps=resolution.prevention_steps,
+            raw_logs=incident.raw_logs,
+            verified_by=resolution.verified_by
         )
 
     return resolution

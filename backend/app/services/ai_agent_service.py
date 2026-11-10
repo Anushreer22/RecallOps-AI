@@ -79,9 +79,11 @@ class IncidentAIAgent:
         # Step 4: Synthesize root cause hypothesis and remediation plan
         if historical_matches:
             top_match = historical_matches[0]
-            confidence = min(0.95, max(0.65, top_match.similarity_score * 1.5))
+            # Ground confidence directly in the measured vector similarity score without false minimum floors
+            confidence = round(min(1.0, top_match.similarity_score), 2)
             hypothesized_cause = (
-                f"High-confidence correlation with historical incident '{top_match.title}'. "
+                f"Historical match found with incident '{top_match.title}' "
+                f"(cosine similarity: {top_match.similarity_score:.4f}). "
                 f"Probable root cause: {top_match.root_cause}"
             )
             runbook_steps = [
@@ -95,17 +97,17 @@ class IncidentAIAgent:
                 "Ensure circuit breaker metrics are monitored during rollout."
             ]
         else:
-            confidence = 0.55
+            confidence = 0.0
             hypothesized_cause = (
-                f"Novel anomaly in {service_name}. Detected signature categories: "
-                f"{[s['category'] for s in detected_signatures] if detected_signatures else 'Uncategorized anomaly'}. "
-                f"No close historical matches found in episodic memory."
+                f"No historical matches found in episodic memory. "
+                f"Rule-based diagnostic hypothesis for {service_name}: "
+                f"{[s['category'] for s in detected_signatures] if detected_signatures else 'Uncategorized anomaly'}."
             )
             runbook_steps = [
                 f"1. Isolate {service_name} traffic by draining 50% of ingress requests.",
                 f"2. Capture thread dump and heap profiler snapshot before pod recycling.",
                 f"3. Check upstream dependencies and downstream blast radius ({blast_summary.total_impacted_services} services impacted).",
-                f"4. Once resolved, submit resolution to RecallOps to train episodic memory for future recall."
+                f"4. Once resolved, submit verified resolution to persist to episodic memory."
             ]
             cautions = [
                 "Proceed with caution: Unverified remediation steps may cause cascading restarts in downstream tiers."

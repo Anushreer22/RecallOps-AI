@@ -21,27 +21,66 @@ flowchart TD
         IngestAPI --> PQ["Priority Triage Queue (Max-Heap)"]
         IngestAPI --> Trie["Error Signature Trie"]
         IngestAPI --> Graph["Service Topology DAG"]
-        IngestAPI --> VectorIndex["Episodic Memory (k-NN Cosine Similarity)"]
+        IngestAPI --> VectorIndex["In-Memory Episodic Index (k-NN Cosine Similarity)"]
     end
 
     subgraph Agent["3. AI Diagnostic Agent"]
         PQ --> TriageDispatcher["Triage & Prioritization"]
-        TriageDispatcher --> AgentCore["Autonomous Diagnostic Agent"]
+        TriageDispatcher --> AgentCore["Diagnostic Reasoning Agent"]
         Trie -->|Extracted Signatures| AgentCore
         Graph -->|Blast Radius & Depth| AgentCore
         VectorIndex -->|Top-K Historical Outages| AgentCore
         AgentCore --> Output["Diagnosis, Hypothesized Cause & Runbook"]
     end
 
-    subgraph Feedback["4. Persistent Feedback Loop"]
+    subgraph Feedback["4. Persistent Feedback Loop & Storage"]
         Engineer["On-Call SRE Engineer"] -->|Verify & Apply Fix| ResolveAPI["/api/v1/incidents/{id}/resolve"]
-        ResolveAPI -->|Index Post-Mortem| VectorIndex
+        ResolveAPI -->|ACID Transaction| RDB[("Relational Database (SQLite / Postgres)")]
+        ResolveAPI -->|Index Verified Fix| VectorIndex
+        RDB -.->|Startup Rehydration| VectorIndex
     end
 ```
 
 ---
 
-## 3. The 5 Core Engineering Pillars
+## 3. Persistent Memory Architecture: Database vs. In-Memory Search Index
+
+A core architectural principle of RecallOps-AI is the clear separation between **Durable Persistence** and **Fast Algorithmic Search**:
+
+```
++--------------------------------------------------------------------------+
+|                        DURABLE PERSISTENCE LAYER                         |
+|                    (SQLAlchemy ORM + SQLite/PostgreSQL)                  |
+|                                                                          |
+|  - Table: `incidents` (title, description, service_name, raw_logs)       |
+|  - Table: `incident_resolutions` (root_cause, action_taken, verified_by) |
+|  - ACID Guarantees: Transactional rollbacks on failure                   |
+|  - Source of Truth: Survives process restarts, crashes, deployments      |
++--------------------------------------------------------------------------+
+                                     |
+               Startup Rehydration   |   Verified Resolution
+             (rehydrate_from_db)     |   (record_resolution)
+                                     v
++--------------------------------------------------------------------------+
+|                       EPISODIC IN-MEMORY SEARCH INDEX                    |
+|                        (EpisodicMemoryIndex in RAM)                      |
+|                                                                          |
+|  - Structure: Sparse TF-IDF token dictionary + precomputed vector norms  |
+|  - Retrieval: Cosine Similarity k-NN ranking via min-heap               |
+|  - Synchronization: Thread-safe via threading.RLock                     |
+|  - Lifecycle: Ephemeral; rebuilt from verified database records on start |
++--------------------------------------------------------------------------+
+```
+
+### Key Properties:
+1. **Source of Truth:** The database is the authoritative storage layer. Unverified diagnoses are never saved to the database as resolutions.
+2. **Rehydration at Startup:** During FastAPI `lifespan` initialization, `EpisodicMemoryService.rehydrate_from_db()` queries `IncidentRepository.get_all_resolved()` to rebuild the TF-IDF vectors in RAM. If the database is empty, it initializes an empty index without hardcoded memory dependencies.
+3. **Verified Ingestion Gate:** `record_resolution()` rejects any resolution where `verified_by` is absent or empty, guaranteeing that speculative or unverified triage notes never contaminate episodic memory.
+4. **Duplicate Immunity:** Re-resolving an incident updates the existing database record in place and updates the memory index cleanly without inflating document counts or inverse document frequencies.
+
+---
+
+## 4. The 5 Core Engineering Pillars
 
 RecallOps-AI is designed strictly around the **5 Core Concepts**:
 
@@ -56,8 +95,7 @@ To achieve content-based recall over past incident reports and logs:
 * **Cosine Similarity Metric:**
   $$S_C(\vec{u}, \vec{v}) = \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\|_2 \|\vec{v}\|_2} = \frac{\sum_{i=1}^n u_i v_i}{\sqrt{\sum_{i=1}^n u_i^2} \sqrt{\sum_{i=1}^n v_i^2}}$$
 * **Complexity:**
-  * Vector generation: $\mathcal{O}(|tokens|)$
-  * Comparison against $N$ indexed incidents: $\mathcal{O}(N \times \min(|u|, |v|))$
+  * Search scan across $N$ indexed incidents: $\mathcal{O}(N \times \min(|u|, |v|))$
   * Top-$K$ ranking using min-heap: $\mathcal{O}(N \log K)$
 
 #### B. Priority Queue / Max-Heap for Dynamic Alert Triage
@@ -68,6 +106,7 @@ Alerts must not be processed purely First-In-First-Out (FIFO). A Sev-1 payment o
   * $w_{\text{tier}} = 0.30$ (TIER_0=100, TIER_1=70, TIER_2=40, TIER_3=10)
   * $w_{\text{impact}} = 0.20$ ($U = \text{impacted users}$)
 * **Complexity:** Insertion $\mathcal{O}(\log M)$, Deletion $\mathcal{O}(\log M)$, Peek $\mathcal{O}(1)$ where $M$ is active queue size.
+* **Concurrency:** Thread-safe using `threading.RLock`.
 
 #### C. Directed Acyclic Graph (DAG) for Microservice Blast Radius
 * **Adjacency Representation:** Downstream dependency mapping $G = (V, E)$.
@@ -89,9 +128,9 @@ Alerts must not be processed purely First-In-First-Out (FIFO). A Sev-1 payment o
   * Dependency injection pattern via FastAPI's `Depends(get_db)`.
   * Separation of concerns: Routers $\rightarrow$ Services $\rightarrow$ Repositories $\rightarrow$ SQLAlchemy ORM Models.
 * **Webhook Ingestion:**
-  * Normalized schema supporting incoming JSON payloads from PagerDuty, Prometheus Alertmanager, Datadog, and Grafana.
+  * Webhook listener mapped to structured Incident models.
 * **Database & Persistence:**
-  * Relational metadata persisted via SQLAlchemy with transactional isolation and foreign key constraints between `incidents` and `incident_resolutions`.
+  * Relational metadata persisted via SQLAlchemy with transactional isolation, rollback error handlers, and foreign key constraints between `incidents` and `incident_resolutions`.
 
 ---
 
@@ -99,17 +138,17 @@ Alerts must not be processed purely First-In-First-Out (FIFO). A Sev-1 payment o
 
 * **End-to-End Incident Lifecycle:**
   $$\text{OPEN} \xrightarrow{\text{Webhook / Ingest}} \text{INVESTIGATING} \xrightarrow{\text{AI Diagnosis}} \text{MITIGATED} \xrightarrow{\text{Verified Fix}} \text{RESOLVED}$$
-* **Zero-Cold-Start Memory Seeding:**
-  * Pre-loaded with canonical production outages (PgBouncer connection pool saturation, Redis OOM LRU eviction storm, Kubernetes CoreDNS ndots:5 timeout, Third-party rate limiting, Kafka consumer partition rebalancing).
+* **Database-Driven Memory Seeding:**
+  * Canonical production outages seeded directly into the relational database on first run, providing durable grounding for vector search rehydration.
 
 ---
 
 ### Pillar 4: Testing & Validation
 
 * **Validation Strategy:**
-  * 100% test pass rate across 20 automated unit and integration tests.
+  * 100% test pass rate across 28 automated unit and integration tests.
+  * Dedicated persistence tests: Service recreation, full application restart on temporary databases, duplicate resolution handling, and database failure handling.
   * Algorithmic verification: Vector similarity ranking, heap priority monotonicity, BFS blast radius traversal, cycle detection.
-  * API integration tests: Alert ingestion, automated triage, AI diagnosis, and resolution feedback.
   * Schema edge-case testing: Pydantic field constraint checks (negative user values, missing required fields).
 
 ---

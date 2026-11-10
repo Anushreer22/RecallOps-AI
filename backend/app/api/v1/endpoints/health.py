@@ -11,8 +11,9 @@ router = APIRouter(tags=["Health & Status"])
 @router.get("/health", response_model=HealthResponse)
 def health_check():
     """Returns application health, indexed memory count, active triage count, and topology nodes."""
+    system_status = "healthy" if (memory_service.is_ready and not memory_service.last_error) else "degraded"
     return HealthResponse(
-        status="healthy",
+        status=system_status,
         project=settings.PROJECT_NAME,
         version=settings.VERSION,
         indexed_memories=memory_service.count(),
