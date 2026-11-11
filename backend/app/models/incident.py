@@ -22,6 +22,7 @@ class Incident(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     resolution = relationship("IncidentResolution", back_populates="incident", uselist=False, cascade="all, delete-orphan")
+    investigations = relationship("Investigation", back_populates="incident", cascade="all, delete-orphan", order_by="desc(Investigation.created_at)")
 
 
 class IncidentResolution(Base):

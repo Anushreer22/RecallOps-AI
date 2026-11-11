@@ -242,6 +242,89 @@ Synthesizes historical incident memory, log Trie signatures, and topology blast 
 
 ---
 
+## 4.1 LLM Investigation Engine Endpoints
+
+### `POST /incidents/{incident_id}/investigate`
+Triggers an automated structured incident investigation using the configured LLM provider (OpenAI / Mock).
+
+**Query Parameters:**
+- `provider`: Optional provider override (e.g. `openai`, `mock`)
+
+**Response `200 OK`:**
+```json
+{
+  "id": "INV-7F2A190B",
+  "incident_id": "INC-4A2BC9E1",
+  "provider": "openai",
+  "model_name": "gpt-4o-mini",
+  "status": "COMPLETED",
+  "summary": "Automated investigation grounded in collected system logs and historical resolution memory.",
+  "report": {
+    "incident_id": "INC-4A2BC9E1",
+    "summary": "Database connection pool saturation triggered by unclosed sessions in payment-service.",
+    "probable_root_causes": [
+      {
+        "hypothesis": "PostgreSQL connection pool saturation.",
+        "confidence_score": 0.88,
+        "supporting_evidence_ids": ["EVID-INC-INFO", "EVID-LOGS-SIGS", "EVID-HIST-1"],
+        "contradicting_evidence_ids": [],
+        "reasoning": "Scanned log signatures match historical outage HIST-001 with 0.82 similarity."
+      }
+    ],
+    "observed_facts": ["Payment gateway throwing 500 errors", "FATAL: remaining connection slots reserved"],
+    "evidence_gaps": ["Database CPU metrics unavailable"],
+    "suggested_investigation_steps": ["Inspect pg_stat_activity", "Check PgBouncer client pool"],
+    "suggested_resolution": ["Deploy PgBouncer connection pooler", "Recycle leaking worker pods"],
+    "related_historical_incidents": ["HIST-001"],
+    "requires_human_review": true,
+    "hallucinated_evidence_ids": []
+  },
+  "created_at": "2026-11-11T12:00:00Z",
+  "completed_at": "2026-11-11T12:00:03Z",
+  "error_message": null
+}
+```
+
+### `GET /incidents/{incident_id}/investigations`
+Lists historical investigation reports for a given incident.
+
+**Query Parameters:**
+- `skip`: Integer (default 0)
+- `limit`: Integer (default 50)
+
+### `GET /investigations/{investigation_id}`
+Retrieves a specific investigation report by ID.
+
+### `POST /investigations/{investigation_id}/feedback`
+Allows an on-call engineer to verify, approve, or reject an investigation report.
+
+**Request Body:**
+```json
+{
+  "approved": true,
+  "verified_by": "Senior-SRE",
+  "root_cause": "Unclosed connections in JWT validation middleware.",
+  "action_taken": "Applied PgBouncer pooler and fixed session context manager.",
+  "prevention_steps": "Added pool healthcheck alert at 80% saturation."
+}
+```
+
+**Response `200 OK`:**
+```json
+{
+  "investigation_id": "INV-7F2A190B",
+  "incident_id": "INC-4A2BC9E1",
+  "approved": true,
+  "verified_by": "Senior-SRE",
+  "memory_indexed": true,
+  "resolution_id": "RES-8A1902C1",
+  "incident_status": "RESOLVED",
+  "message": "Investigation INV-7F2A190B approved by Senior-SRE. Incident resolved and resolution indexed into episodic memory."
+}
+```
+
+---
+
 ## 5. Incident Resolution & Feedback Loop
 
 ### `POST /incidents/{incident_id}/resolve`

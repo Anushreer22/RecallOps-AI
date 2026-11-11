@@ -89,6 +89,28 @@ To interface reliably with third-party observability platforms, RecallOps-AI inc
 3. **Lifecycle Synchronization:**
    - Correlates incoming alerts by `incident_key` (PagerDuty incident ID, Datadog alert ID, or Alertmanager fingerprint).
    - Dynamically updates incident status across `triggered` (OPEN), `acknowledged` (INVESTIGATING), and `resolved` (RESOLVED).
+
+---
+
+## 3.2 Real LLM-Powered Investigation Engine
+
+RecallOps-AI Phase 3 replaces static template diagnosis with a provider-independent AI investigation architecture (`backend/app/ai/`):
+
+1. **Multi-Modal Evidence Collection (`EvidenceService`):**
+   - Synthesizes incident core metadata, trie-scanned error signatures, raw log extracts, topology DAG blast-radius calculations, and verified historical resolutions into a unified `EvidenceCollection`.
+   - Explicitly models uninstrumented telemetry (`EVID-TELEM-*`), ensuring honest acknowledgment of missing data.
+
+2. **Prompt Injection Defense & Neutralization (`PromptService`):**
+   - Strips and neutralizes closing/opening XML tags within raw telemetry.
+   - Constrains untrusted log strings inside strictly delimited `<untrusted_*>` blocks, commanding the model to treat content as passive data to analyze.
+
+3. **Grounding & Anti-Hallucination Gatekeeper (`InvestigationService`):**
+   - Cross-checks all `supporting_evidence_ids` against actual collected evidence IDs.
+   - Automatically quarantines hallucinated citations into `hallucinated_evidence_ids` and flags `requires_human_review = True`.
+
+4. **Human-in-the-Loop Feedback & Memory Gating:**
+   - SREs review and approve/reject AI findings via `POST /api/v1/investigations/{id}/feedback`.
+   - **Strict Memory Invariant:** Unverified AI hypotheses NEVER enter persistent episodic memory. Only human-approved resolutions are indexed into `EpisodicMemoryService`.
 |  - Lifecycle: Ephemeral; rebuilt from verified database records on start |
 +--------------------------------------------------------------------------+
 ```

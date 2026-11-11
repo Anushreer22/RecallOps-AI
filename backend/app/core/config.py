@@ -11,9 +11,12 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./recallops.db"
     
     # LLM Settings
+    LLM_PROVIDER: str = "openai"  # openai, mock, etc.
     LLM_API_KEY: Optional[str] = None
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_TEMPERATURE: float = 0.2
+    LLM_TIMEOUT_SECONDS: float = 30.0
+    LLM_MAX_RETRIES: int = 2
     
     # Webhook Ingestion & Security
     PAGERDUTY_WEBHOOK_SECRET: Optional[str] = None
