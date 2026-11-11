@@ -54,6 +54,7 @@ A core architectural principle of RecallOps-AI is the clear separation between *
 |                                                                          |
 |  - Table: `incidents` (title, description, service_name, raw_logs)       |
 |  - Table: `incident_resolutions` (root_cause, action_taken, verified_by) |
+|  - Table: `webhook_events` (provider, event_id, deduplication, audit)    |
 |  - ACID Guarantees: Transactional rollbacks on failure                   |
 |  - Source of Truth: Survives process restarts, crashes, deployments      |
 +--------------------------------------------------------------------------+
@@ -68,6 +69,26 @@ A core architectural principle of RecallOps-AI is the clear separation between *
 |  - Structure: Sparse TF-IDF token dictionary + precomputed vector norms  |
 |  - Retrieval: Cosine Similarity k-NN ranking via min-heap               |
 |  - Synchronization: Thread-safe via threading.RLock                     |
++--------------------------------------------------------------------------+
+```
+
+---
+
+## 3.1 Webhook Adapter & Ingestion Pipeline
+
+To interface reliably with third-party observability platforms, RecallOps-AI incorporates a modular webhook ingestion pipeline:
+
+1. **Adapter Registry (`backend/app/integrations/`):**
+   - Implements a uniform `BaseWebhookAdapter` interface for PagerDuty (v3/v2), Datadog, and Prometheus Alertmanager.
+   - Encapsulates provider authentication (HMAC-SHA256 signatures, Bearer tokens, custom headers), schema parsing, and normalization.
+
+2. **Database-Backed Deduplication:**
+   - Provider delivery retries are checked against `webhook_events` table using an atomic `(provider, provider_event_id)` unique constraint.
+   - Retries return HTTP `200 OK` with `status: DUPLICATE` to signal successful receipt to the provider without duplicating internal state.
+
+3. **Lifecycle Synchronization:**
+   - Correlates incoming alerts by `incident_key` (PagerDuty incident ID, Datadog alert ID, or Alertmanager fingerprint).
+   - Dynamically updates incident status across `triggered` (OPEN), `acknowledged` (INVESTIGATING), and `resolved` (RESOLVED).
 |  - Lifecycle: Ephemeral; rebuilt from verified database records on start |
 +--------------------------------------------------------------------------+
 ```

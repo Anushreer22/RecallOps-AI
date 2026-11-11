@@ -22,7 +22,8 @@ class IncidentRepository:
             service_tier=incident_in.service_tier.upper(),
             impacted_users=incident_in.impacted_users,
             raw_logs=incident_in.raw_logs,
-            source=incident_in.source
+            source=incident_in.source,
+            incident_key=getattr(incident_in, "incident_key", None)
         )
         try:
             self.db.add(db_incident)
@@ -35,6 +36,14 @@ class IncidentRepository:
 
     def get_by_id(self, incident_id: str) -> Optional[Incident]:
         return self.db.query(Incident).filter(Incident.id == incident_id).first()
+
+    def get_by_incident_key(self, incident_key: str) -> Optional[Incident]:
+        return (
+            self.db.query(Incident)
+            .filter(Incident.incident_key == incident_key)
+            .order_by(Incident.created_at.desc())
+            .first()
+        )
 
     def list_all(self, skip: int = 0, limit: int = 100, status: Optional[str] = None) -> List[Incident]:
         query = self.db.query(Incident)

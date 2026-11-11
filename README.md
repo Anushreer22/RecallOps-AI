@@ -11,10 +11,10 @@ RecallOps-AI bridges the gap between stateless AI triage and long-term productio
 | Core Concept | Implementation in RecallOps-AI |
 | :--- | :--- |
 | **1. Data Structures & Algorithms** | • **Vector Index & Cosine Similarity ($k$-NN):** In-memory TF-IDF sparse vector retrieval with thread-safe `RLock` synchronization.<br>• **Priority Queue (Max-Heap):** Dynamic triage prioritizing alerts by Severity, Service Tier, and User Impact.<br>• **Directed Acyclic Graph (DAG):** Downstream BFS blast-radius propagation and DFS cycle detection.<br>• **Prefix Trie:** $\mathcal{O}(L)$ log tokenization and error signature categorization. |
-| **2. API Integration** | • **FastAPI REST Endpoints:** Modular `/api/v1/` routes with dependency injection.<br>• **Webhook Ingestion:** Normalizes alerts from PagerDuty, Datadog, Prometheus, Grafana.<br>• **Durable Persistence:** SQLAlchemy ORM models with SQLite/PostgreSQL persistence and transactional rollback guarantees. |
+| **2. API Integration** | • **FastAPI REST Endpoints:** Modular `/api/v1/` routes with dependency injection.<br>• **Production Webhook Adapters:** Native adapters for PagerDuty (v3 HMAC-SHA256 & v2), Datadog (token auth & tag parsing), and Prometheus Alertmanager (v4 grouped alerts).<br>• **Database Deduplication:** Idempotency tracking in `webhook_events` via unique constraint on `(provider, provider_event_id)`.<br>• **Durable Persistence:** SQLAlchemy ORM models with SQLite/PostgreSQL persistence and transactional rollback guarantees. |
 | **3. Prototyping** | • **Persistent Episodic Memory Lifecycle:** Ingestion $\rightarrow$ Triage $\rightarrow$ Memory Recall $\rightarrow$ Diagnosis $\rightarrow$ Verified Resolution $\rightarrow$ Database Persistence $\rightarrow$ Startup Rehydration.<br>• **Database-Driven Memory Seeding:** Grounded historical outages persisted in relational storage, not volatile RAM. |
-| **4. Testing & Validation** | • **28 Automated Tests:** Full test suite covering persistence across server restarts, service recreation, duplicate handling, database failure handling, DSA, schemas, and lifecycle APIs.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
-| **5. Technical Documentation** | • **System Design:** Detailed architectural documentation, database persistence vs in-memory index design in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Comprehensive gap analysis and vulnerability review in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
+| **4. Testing & Validation** | • **49 Automated Tests:** Full test suite covering webhook authentication, idempotency, lifecycle transitions, persistence across server restarts, service recreation, duplicate handling, database failure handling, DSA, schemas, and lifecycle APIs.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
+| **5. Technical Documentation** | • **Webhook Architecture:** Complete provider security and normalization specifications in `docs/WEBHOOK_INTEGRATIONS.md`.<br>• **System Design:** Detailed architectural documentation, database persistence vs in-memory index design in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Comprehensive gap analysis and vulnerability review in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
 
 ---
 
@@ -54,6 +54,18 @@ RecallOps-AI cleanly separates **durable relational persistence** from the **in-
 
 ---
 
+## 🔌 Production-Ready Webhook Adapters
+
+RecallOps-AI provides dedicated, secure ingestion endpoints for industry-standard observability tools:
+
+- **PagerDuty (`/api/v1/webhooks/pagerduty`):** V3 HMAC-SHA256 signature verification via `X-PagerDuty-Signature` with secret rotation support, plus V2 legacy support.
+- **Datadog (`/api/v1/webhooks/datadog`):** Authenticated monitor ingestion via `X-Datadog-Webhook-Token` or `Authorization: Bearer`, dynamic tag parsing (`service:<name>`).
+- **Prometheus Alertmanager (`/api/v1/webhooks/alertmanager`):** V4 webhook receiver format with Bearer token authentication, unpacking grouped firing and resolved alerts.
+- **Deduplication & Idempotency:** Managed via `webhook_events` table with unique constraint `(provider, provider_event_id)` and fallback deterministic hashing.
+- **Full Guide:** See [`docs/WEBHOOK_INTEGRATIONS.md`](file:///c:/Users/ANUSHREE%20R/RecallOps-AI/docs/WEBHOOK_INTEGRATIONS.md).
+
+---
+
 ## 🚀 Quickstart Guide
 
 ### 1. Prerequisites
@@ -81,13 +93,14 @@ Open **[http://localhost:8000/docs](http://localhost:8000/docs)** to view the in
 
 ## 🧪 Running the Test Suite
 
-Run the full automated test suite (28 tests):
+Run the full automated test suite (49 tests):
 
 ```powershell
 pytest -v
 ```
 
 **Test Breakdown:**
+* `backend/tests/test_webhooks.py`: 21 tests (PagerDuty v3 HMAC-SHA256 & v2 legacy, Datadog token & bearer auth, Prometheus Alertmanager grouped alerts, auth failures, idempotency & deduplication, payload size rejection, credential scrubbing, audit events, and critical concurrency / lifecycle reliability scenarios).
 * `backend/tests/test_persistent_memory.py`: 8 tests (Verified additions, service recreation, restart persistence across temporary database, unverified rejection, duplicate resolution protection, multiple record rehydration, empty memory retrieval, database failure handling).
 * `backend/tests/test_algorithms.py`: 8 tests (Vector similarity, Priority queue, Graph blast radius, Cycle detection, Error Trie).
 * `backend/tests/test_health.py`: 2 tests (System health, degraded state detection, and metadata).
@@ -105,7 +118,8 @@ RecallOps-AI/
 │   │   ├── api/v1/
 │   │   │   ├── endpoints/
 │   │   │   │   ├── health.py              # Healthcheck & degraded status reporting
-│   │   │   │   └── incidents.py           # Ingestion, Triage, Diagnosis, Resolution
+│   │   │   │   ├── incidents.py           # Ingestion, Triage, Diagnosis, Resolution
+│   │   │   │   └── webhooks.py            # PagerDuty, Datadog, Alertmanager endpoints
 │   │   │   └── router.py                  # API V1 router aggregation
 │   │   ├── core/
 │   │   │   ├── algorithms.py              # DSA: VectorIndex, Max-Heap, DAG, Trie (Thread-safe)
@@ -113,8 +127,15 @@ RecallOps-AI/
 │   │   ├── db/
 │   │   │   ├── base.py                    # DeclarativeBase
 │   │   │   └── session.py                 # SQLAlchemy session engine
+│   │   ├── integrations/                  # Modular webhook adapters
+│   │   │   ├── base.py                    # BaseWebhookAdapter & NormalizedAlertEvent
+│   │   │   ├── registry.py                # WebhookAdapterRegistry
+│   │   │   ├── pagerduty/                 # PagerDuty adapter, schemas & HMAC verification
+│   │   │   ├── datadog/                   # Datadog adapter, schemas & token security
+│   │   │   └── alertmanager/              # Alertmanager adapter, schemas & auth
 │   │   ├── models/
-│   │   │   └── incident.py                # Incident & Resolution ORM models
+│   │   │   ├── incident.py                # Incident & Resolution ORM models
+│   │   │   └── webhook_event.py           # Webhook event deduplication model
 │   │   ├── repositories/
 │   │   │   └── incident_repository.py     # Transactional data access layer
 │   │   ├── schemas/

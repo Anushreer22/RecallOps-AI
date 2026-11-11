@@ -25,8 +25,95 @@ Returns health status, active memory document count, active triage queue count, 
 
 ## 2. Incident Ingestion & Webhooks
 
-### `POST /incidents/webhook`
-Ingests an alert payload from external monitoring systems (PagerDuty, Prometheus, Datadog).
+### `POST /webhooks/pagerduty`
+Ingests PagerDuty Webhooks v3 (with HMAC-SHA256 signature verification) or v2 legacy messages.
+
+**Headers:**
+- `X-PagerDuty-Signature: v1=<hmac-sha256-hex>`
+
+**Response `200 OK`:**
+```json
+{
+  "provider": "pagerduty",
+  "events_count": 1,
+  "processed_count": 1,
+  "duplicate_count": 0,
+  "results": [
+    {
+      "event_id": "01DP1A7K9M2",
+      "incident_key": "srv-auth-pool",
+      "event_type": "triggered",
+      "internal_incident_id": "INC-7F3A2B",
+      "already_processed": false,
+      "status": "PROCESSED"
+    }
+  ]
+}
+```
+
+### `POST /webhooks/datadog`
+Ingests Datadog Monitor and Event webhook alerts with custom token authentication.
+
+**Headers:**
+- `X-Datadog-Webhook-Token: <token>` or `Authorization: Bearer <token>`
+
+**Response `200 OK`:**
+```json
+{
+  "provider": "datadog",
+  "events_count": 1,
+  "processed_count": 1,
+  "duplicate_count": 0,
+  "results": [
+    {
+      "event_id": "184920481",
+      "incident_key": "982741",
+      "event_type": "triggered",
+      "internal_incident_id": "INC-8A91C2",
+      "already_processed": false,
+      "status": "PROCESSED"
+    }
+  ]
+}
+```
+
+### `POST /webhooks/alertmanager`
+Ingests Prometheus Alertmanager v4 webhook payloads with Bearer token authentication and unpacks grouped alerts.
+
+**Headers:**
+- `Authorization: Bearer <token>`
+
+**Response `200 OK`:**
+```json
+{
+  "provider": "alertmanager",
+  "events_count": 2,
+  "processed_count": 2,
+  "duplicate_count": 0,
+  "results": [
+    {
+      "event_id": "4a18b9c201...",
+      "incident_key": "alertmanager-fp01",
+      "event_type": "triggered",
+      "internal_incident_id": "INC-3F1829",
+      "already_processed": false,
+      "status": "PROCESSED"
+    }
+  ]
+}
+```
+
+### `GET /webhooks/events`
+Lists recorded webhook ingestion events for auditing, observability, and deduplication verification.
+
+**Query Parameters:**
+- `skip`: Integer (default 0)
+- `limit`: Integer (default 50, max 100)
+- `provider`: Optional filter (`pagerduty`, `datadog`, `alertmanager`)
+- `status`: Optional filter (`PROCESSED`, `DUPLICATE`, `FAILED`)
+
+### `POST /incidents/webhook` (Legacy Ingestion)
+Ingests an alert payload from external monitoring systems (PagerDuty, Prometheus, Datadog) using a simplified payload.
 
 **Request Body:**
 ```json

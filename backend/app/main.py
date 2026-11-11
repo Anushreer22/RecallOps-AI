@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import settings
 from backend.app.db.base import Base
+import backend.app.models  # Ensure all SQLAlchemy models are registered
 from backend.app.db.session import engine, SessionLocal
 from backend.app.api.v1.router import api_router
 from backend.app.repositories.incident_repository import IncidentRepository

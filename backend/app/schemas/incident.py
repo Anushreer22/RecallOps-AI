@@ -17,6 +17,7 @@ class IncidentBase(BaseModel):
     impacted_users: int = Field(0, ge=0, example=1200)
     raw_logs: Optional[str] = Field(None, example="FATAL: remaining connection slots are reserved for non-replication superuser connections")
     source: str = Field("API", example="PagerDuty")
+    incident_key: Optional[str] = Field(None, example="pagerduty:PD-1234")
 
 
 class IncidentCreate(IncidentBase):

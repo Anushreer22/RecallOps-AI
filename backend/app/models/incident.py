@@ -17,6 +17,7 @@ class Incident(Base):
     impacted_users = Column(Integer, default=0)
     raw_logs = Column(Text, nullable=True)
     source = Column(String(64), default="API")                   # PagerDuty, Datadog, Prometheus, Manual
+    incident_key = Column(String(128), nullable=True, index=True) # External provider correlation key
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

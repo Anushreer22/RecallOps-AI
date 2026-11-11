@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_TEMPERATURE: float = 0.2
     
+    # Webhook Ingestion & Security
+    PAGERDUTY_WEBHOOK_SECRET: Optional[str] = None
+    DATADOG_WEBHOOK_TOKEN: Optional[str] = None
+    ALERTMANAGER_WEBHOOK_TOKEN: Optional[str] = None
+    WEBHOOK_AUTH_REQUIRED: bool = True
+    WEBHOOK_MAX_PAYLOAD_BYTES: int = 2 * 1024 * 1024  # 2 MB limit
+    
     # Operational Constants
     SIMILARITY_THRESHOLD: float = 0.15
     MAX_HISTORICAL_RECALL: int = 5

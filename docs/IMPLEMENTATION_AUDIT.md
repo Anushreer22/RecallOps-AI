@@ -51,10 +51,10 @@ The following capabilities are verified by inspecting the actual source code and
 | # | Documented / Marketing Claim | Actual Implementation Reality | File & Function Reference |
 | :--- | :--- | :--- | :--- |
 | **1** | *"Sub-linear similarity search across historical incidents"* (`README.md`, `SYSTEM_DESIGN.md`) | **False.** The search iterates over every single indexed document in a linear `for doc_id, doc_vec in self.doc_vectors.items():` loop. Complexity is $\mathcal{O}(N \cdot \|Q\| + N \log K)$ (linear scan). There is no HNSW, KD-Tree, or inverted posting index. | [`backend/app/core/algorithms.py:125`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/core/algorithms.py#L125) (`search_similar`) |
-| **2** | *"Persistent Episodic Memory"* (`README.md`) | **False.** Episodic memory is held strictly in an in-memory Python dictionary. Upon application restart, all resolutions learned during runtime are lost. Only 5 static seed incidents remain. | [`backend/app/services/memory_service.py:7-13`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/services/memory_service.py#L7-L13) (`EpisodicMemoryService.__init__`) |
+| **2** | *"Persistent Episodic Memory"* (`README.md`) | **RESOLVED (Phase 1).** Episodic memory persists in SQLAlchemy database (`incidents` and `incident_resolutions`) and rehydrates into RAM upon startup (`rehydrate_from_db`). | [`backend/app/services/memory_service.py:21`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/services/memory_service.py#L21) (`rehydrate_from_db`) |
 | **3** | *"Autonomous AI diagnostic agent with LLM integration"* (`SYSTEM_DESIGN.md`, `README.md`) | **False.** No LLM API (OpenAI, Groq, Anthropic) is ever called. The diagnostic agent uses static Python string formatting templates (`f"High-confidence correlation..."`). `LLM_API_KEY` in `config.py` is unused. | [`backend/app/services/ai_agent_service.py:80-113`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/services/ai_agent_service.py#L80-L113) (`IncidentAIAgent.diagnose`) |
-| **4** | *"Normalizes alerts from PagerDuty, Datadog, Prometheus, Grafana"* (`README.md`) | **False.** No vendor normalization exists. The webhook endpoint expects a proprietary JSON payload (`alert_name`, `tier`, `details`, `impacted_users`). Real webhooks from Datadog, PagerDuty, or Prometheus will fail with `422 Unprocessable Entity`. | [`backend/app/api/v1/endpoints/incidents.py:44`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/api/v1/endpoints/incidents.py#L44) (`ingest_webhook_alert`) |
-| **5** | *"Thread-safe max-heap queue for active incident triage"* (`algorithms.py:189`) | **False.** There are no locks (`threading.Lock` or `asyncio.Lock`). Mutating `_heap` and `_entry_map` concurrently from multiple worker threads will cause race conditions and heap corruption. | [`backend/app/core/algorithms.py:188-243`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/core/algorithms.py#L188-L243) (`PriorityTriageQueue`) |
+| **4** | *"Normalizes alerts from PagerDuty, Datadog, Prometheus, Grafana"* (`README.md`) | **RESOLVED (Phase 2).** Dedicated adapters (`/api/v1/webhooks/pagerduty`, `/api/v1/webhooks/datadog`, `/api/v1/webhooks/alertmanager`) normalize real vendor payloads into `NormalizedAlertEvent` with HMAC/token security and database deduplication. | [`backend/app/integrations/`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/integrations/) and [`backend/app/api/v1/endpoints/webhooks.py`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/api/v1/endpoints/webhooks.py) |
+| **5** | *"Thread-safe max-heap queue for active incident triage"* (`algorithms.py:189`) | **RESOLVED (Phase 1).** Added `threading.RLock()` to `PriorityTriageQueue` and `EpisodicMemoryIndex`. | [`backend/app/core/algorithms.py:188-255`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/core/algorithms.py#L188-L255) (`PriorityTriageQueue`) |
 | **6** | *"Microservice topology managed in database"* (`models/incident.py:40`) | **False.** The `ServiceDependency` SQLAlchemy table is completely orphaned. The application never reads from or writes to this table; topology is hardcoded in memory. | [`backend/app/models/incident.py:40-47`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/models/incident.py#L40-L47) and [`topology_service.py:12-51`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/services/topology_service.py#L12-L51) |
 
 ---
@@ -71,21 +71,33 @@ The following capabilities are verified by inspecting the actual source code and
 - **Initial Description:** When a post-mortem was resolved via `POST /incidents/{id}/resolve`, it was written to the database and indexed into `memory_service.index` in RAM. However, on server restart, `EpisodicMemoryService.__init__()` only ran `_seed_historical_outages()`. It **never queried `IncidentRepository.get_all_resolved()`** to rehydrate the vector index from the database.
 - **Initial Impact:** System permanently forgot all learned operational remediations upon any pod restart, crash, or deployment.
 
-### CRIT-02: Absence of Authentication, Authorization, and Webhook Verification
-- **Status:** OPEN (Scheduled for Phase 2: Webhooks & Ingestion Security)
-- **File:** [`backend/app/api/v1/endpoints/incidents.py:26-186`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/api/v1/endpoints/incidents.py#L26-L186)
-- **Description:** Every endpoint is public. There are no API keys, Bearer tokens, or role checks. More critically, `POST /incidents/webhook` lacks HMAC signature verification (e.g., `X-PagerDuty-Signature` or Datadog webhook secret token).
-- **Impact:** Any unauthenticated entity on the network can ingest rogue alerts, flood the priority queue, trigger diagnoses, or mark critical production incidents as resolved with bogus root causes.
+### CRIT-02: Absence of Authentication, Authorization, and Webhook Verification [RESOLVED FOR WEBHOOKS IN PHASE 2]
+- **Status:** **RESOLVED FOR WEBHOOK INGESTION**
+- **File:** [`backend/app/integrations/`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/integrations/), [`backend/app/api/v1/endpoints/webhooks.py`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/api/v1/endpoints/webhooks.py)
+- **Resolution:**
+  - Implemented production webhook security verification:
+    - **PagerDuty:** HMAC-SHA256 signature verification over exact raw bytes with support for comma-separated key rotation (`X-PagerDuty-Signature: v1=<sig>`).
+    - **Datadog:** Secure token authentication supporting `X-Datadog-Webhook-Token` and `Authorization: Bearer <token>` via constant-time `hmac.compare_digest`.
+    - **Prometheus Alertmanager:** Bearer token authentication supporting `Authorization: Bearer <token>` via constant-time comparison matching Alertmanager's `http_config` specification.
+  - Added strict payload size limits (`WEBHOOK_MAX_PAYLOAD_BYTES` = 1MB) returning HTTP 413.
+  - Added recursive sensitive credential sanitization (`redact_sensitive_data()`) stripping secrets, tokens, and passwords prior to logging or persistence.
+  - Enforced authentication via `WEBHOOK_AUTH_REQUIRED` configuration.
+- **Initial Description:** In the legacy prototype, `POST /incidents/webhook` lacked HMAC signature verification and token authentication, allowing unauthenticated requests to create incidents.
+- **Initial Impact:** Any unauthenticated entity on the network could ingest rogue alerts or mark critical production incidents as resolved. User authentication for management APIs remains scheduled for Phase 3.
 
-### CRIT-03: Incompatible Webhook Contract for Real Observability Tools
-- **Status:** OPEN (Scheduled for Phase 2: Webhooks & Ingestion Security)
-- **File:** [`backend/app/schemas/incident.py:70-79`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/schemas/incident.py#L70-L79) (`WebhookAlertPayload`)
-- **Description:** Real monitoring systems use distinct payload schemas:
+### CRIT-03: Incompatible Webhook Contract for Real Observability Tools [RESOLVED IN PHASE 2]
+- **Status:** **RESOLVED**
+- **File:** [`backend/app/integrations/`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/integrations/), [`backend/app/api/v1/endpoints/webhooks.py`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/api/v1/endpoints/webhooks.py), [`backend/app/services/webhook_service.py`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/services/webhook_service.py)
+- **Resolution:**
+  - Implemented modular, vendor-specific webhook adapters for **PagerDuty** (v3 with HMAC-SHA256 signature verification & v2 legacy), **Datadog** (with token authentication & tag-based service extraction), and **Prometheus Alertmanager** (v4 grouped alerts with Bearer token authentication).
+  - Built schema normalization layer transforming diverse vendor payloads into standardized `NormalizedAlertEvent` objects.
+  - Implemented database-backed deduplication and idempotency in `WebhookEvent` table with unique constraint on `(provider, provider_event_id)` to handle delivery retries cleanly.
+  - Added recursive sensitive credential scrubbing (`[REDACTED]`) and payload size limits (`WEBHOOK_MAX_PAYLOAD_BYTES`).
+- **Initial Description:** Real monitoring systems use distinct payload schemas:
   - *PagerDuty v2:* Sends `{ "event": { "event_type": "incident.triggered", "data": { ... } } }`
   - *Prometheus Alertmanager:* Sends `{ "alerts": [ { "status": "firing", "labels": { ... }, "annotations": { ... } } ] }`
   - *Datadog:* Sends `{ "event_type": "...", "body": "...", "title": "..." }`
-  The endpoint strictly expects custom fields (`service`, `tier`, `impacted_users`, `alert_name`).
-- **Impact:** Ingesting alerts directly from any standard APM tool is currently impossible without an unbuilt translation proxy.
+  The legacy endpoint strictly expected custom fields (`service`, `tier`, `impacted_users`, `alert_name`).
 
 ### CRIT-04: Non-Thread-Safe In-Memory State [RESOLVED IN PHASE 1]
 - **Status:** **RESOLVED**
