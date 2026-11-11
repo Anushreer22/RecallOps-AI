@@ -10,7 +10,13 @@ class IncidentRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create(self, incident_in: IncidentCreate, incident_id: Optional[str] = None) -> Incident:
+    def create(
+        self,
+        incident_in: IncidentCreate,
+        incident_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        project_id: Optional[str] = None
+    ) -> Incident:
         inc_id = incident_id or f"INC-{uuid.uuid4().hex[:8].upper()}"
         db_incident = Incident(
             id=inc_id,
@@ -23,7 +29,9 @@ class IncidentRepository:
             impacted_users=incident_in.impacted_users,
             raw_logs=incident_in.raw_logs,
             source=incident_in.source,
-            incident_key=getattr(incident_in, "incident_key", None)
+            incident_key=getattr(incident_in, "incident_key", None),
+            organization_id=organization_id,
+            project_id=project_id
         )
         try:
             self.db.add(db_incident)
@@ -34,19 +42,28 @@ class IncidentRepository:
             self.db.rollback()
             raise
 
-    def get_by_id(self, incident_id: str) -> Optional[Incident]:
-        return self.db.query(Incident).filter(Incident.id == incident_id).first()
+    def get_by_id(self, incident_id: str, organization_id: Optional[str] = None) -> Optional[Incident]:
+        query = self.db.query(Incident).filter(Incident.id == incident_id)
+        if organization_id:
+            query = query.filter(Incident.organization_id == organization_id)
+        return query.first()
 
-    def get_by_incident_key(self, incident_key: str) -> Optional[Incident]:
-        return (
-            self.db.query(Incident)
-            .filter(Incident.incident_key == incident_key)
-            .order_by(Incident.created_at.desc())
-            .first()
-        )
+    def get_by_incident_key(self, incident_key: str, organization_id: Optional[str] = None) -> Optional[Incident]:
+        query = self.db.query(Incident).filter(Incident.incident_key == incident_key)
+        if organization_id:
+            query = query.filter(Incident.organization_id == organization_id)
+        return query.order_by(Incident.created_at.desc()).first()
 
-    def list_all(self, skip: int = 0, limit: int = 100, status: Optional[str] = None) -> List[Incident]:
+    def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        status: Optional[str] = None,
+        organization_id: Optional[str] = None
+    ) -> List[Incident]:
         query = self.db.query(Incident)
+        if organization_id:
+            query = query.filter(Incident.organization_id == organization_id)
         if status:
             query = query.filter(Incident.status == status.upper())
         return query.order_by(Incident.created_at.desc()).offset(skip).limit(limit).all()

@@ -85,6 +85,7 @@ class InvestigationService:
         # 4. Create initial pending Investigation record
         investigation = investigation_repo.create(
             incident_id=incident.id,
+            organization_id=incident.organization_id,
             provider=provider.provider_name,
             model_name=provider.model_name,
             status="PENDING",

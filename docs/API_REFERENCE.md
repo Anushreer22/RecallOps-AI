@@ -398,3 +398,124 @@ Computes the downstream blast radius using Breadth-First Search (BFS) on the ser
   "max_depth": 2
 }
 ```
+
+---
+
+## 7. Authentication & User Profile
+
+### `POST /auth/register`
+Registers a new user account, creates their primary organization, and returns a signed JWT access token.
+
+**Request Body:**
+```json
+{
+  "email": "engineer@company.com",
+  "password": "StrongPassword123!",
+  "full_name": "Senior SRE",
+  "organization_name": "Acme Platform Team"
+}
+```
+
+**Response `201 Created`:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "expires_in": 3600,
+  "user": {
+    "id": "USR-a8b2c4d6",
+    "email": "engineer@company.com",
+    "full_name": "Senior SRE",
+    "is_active": true,
+    "is_superuser": false,
+    "created_at": "2026-11-11T20:00:00Z",
+    "memberships": [
+      {
+        "id": "MEM-12345678",
+        "organization_id": "ORG-98765432",
+        "organization_name": "Acme Platform Team",
+        "organization_slug": "acme-platform-team-1a2b",
+        "role": "ADMIN",
+        "created_at": "2026-11-11T20:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+### `POST /auth/login`
+Authenticates a user via email and password, returning an access token.
+
+**Request Body:**
+```json
+{
+  "email": "engineer@company.com",
+  "password": "StrongPassword123!"
+}
+```
+
+**Response `200 OK`:** Same token payload as registration.
+
+### `GET /auth/me`
+Retrieves current authenticated user profile and memberships. Requires `Authorization: Bearer <token>`.
+
+---
+
+## 8. Organization & Membership Management
+
+### `POST /organizations`
+Creates a new organization. Requires authenticated user.
+
+### `GET /organizations`
+Lists organizations the authenticated user belongs to.
+
+### `GET /organizations/{org_id}/members`
+Lists all members in the organization. Requires membership.
+
+### `POST /organizations/{org_id}/members`
+Adds a new member by email with specified role (`ADMIN`, `ENGINEER`, `VIEWER`). Requires `ADMIN` role.
+
+### `PUT /organizations/{org_id}/members/{user_id}`
+Updates a member's role. Requires `ADMIN` role.
+
+---
+
+## 9. Projects & Services Management
+
+### `POST /projects`
+Creates a project scoped to the active organization. Requires `ENGINEER` role.
+
+### `GET /projects`
+Lists projects in the active organization. Requires `VIEWER` role.
+
+### `POST /services`
+Registers a microservice within the active organization. Requires `ENGINEER` role.
+
+### `GET /services`
+Lists services in the organization. Requires `VIEWER` role.
+
+---
+
+## 10. Persistent Topology & Cycle Detection
+
+### `POST /topology/dependencies`
+Registers a persistent dependency edge (`source_service` -> `target_service`). Requires `ENGINEER` role.
+
+### `DELETE /topology/dependencies/{id}`
+Deletes a dependency edge and updates the in-memory graph. Requires `ENGINEER` role.
+
+### `GET /topology/dependencies`
+Lists all persistent dependency edges for the active organization.
+
+### `GET /topology/blast-radius?service=auth-service`
+Computes downstream blast radius for a service in the active organization.
+
+### `GET /topology/cycles`
+Runs 3-color DFS to detect circular architecture dependencies.
+
+---
+
+## 11. Security Audit Logs
+
+### `GET /audit-logs?action=AUTH_LOGIN&limit=50&offset=0`
+Retrieves sanitized security audit records for the active organization. Requires `VIEWER` role. Sensitive metadata (passwords, tokens) is scrubbed to `[REDACTED]`.

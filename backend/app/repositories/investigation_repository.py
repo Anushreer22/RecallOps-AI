@@ -19,12 +19,14 @@ class InvestigationRepository:
         status: str = "COMPLETED",
         error_message: Optional[str] = None,
         investigation_id: Optional[str] = None,
-        completed_at: Optional[datetime] = None
+        completed_at: Optional[datetime] = None,
+        organization_id: Optional[str] = None
     ) -> Investigation:
         inv_id = investigation_id or f"INV-{uuid.uuid4().hex[:8].upper()}"
         investigation = Investigation(
             id=inv_id,
             incident_id=incident_id,
+            organization_id=organization_id,
             provider=provider,
             model_name=model_name,
             summary=summary,
@@ -43,14 +45,24 @@ class InvestigationRepository:
             self.db.rollback()
             raise
 
-    def get_by_id(self, investigation_id: str) -> Optional[Investigation]:
-        return self.db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    def get_by_id(self, investigation_id: str, organization_id: Optional[str] = None) -> Optional[Investigation]:
+        query = self.db.query(Investigation).filter(Investigation.id == investigation_id)
+        if organization_id:
+            query = query.filter(Investigation.organization_id == organization_id)
+        return query.first()
 
-    def list_by_incident(self, incident_id: str, skip: int = 0, limit: int = 50) -> List[Investigation]:
+    def list_by_incident(
+        self,
+        incident_id: str,
+        skip: int = 0,
+        limit: int = 50,
+        organization_id: Optional[str] = None
+    ) -> List[Investigation]:
+        query = self.db.query(Investigation).filter(Investigation.incident_id == incident_id)
+        if organization_id:
+            query = query.filter(Investigation.organization_id == organization_id)
         return (
-            self.db.query(Investigation)
-            .filter(Investigation.incident_id == incident_id)
-            .order_by(Investigation.created_at.desc())
+            query.order_by(Investigation.created_at.desc())
             .offset(skip)
             .limit(limit)
             .all()

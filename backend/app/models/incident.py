@@ -18,6 +18,8 @@ class Incident(Base):
     raw_logs = Column(Text, nullable=True)
     source = Column(String(64), default="API")                   # PagerDuty, Datadog, Prometheus, Manual
     incident_key = Column(String(128), nullable=True, index=True) # External provider correlation key
+    organization_id = Column(String(64), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id = Column(String(64), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -39,11 +41,5 @@ class IncidentResolution(Base):
     incident = relationship("Incident", back_populates="resolution")
 
 
-class ServiceDependency(Base):
-    __tablename__ = "service_dependencies"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    source_service = Column(String(128), nullable=False, index=True)
-    target_service = Column(String(128), nullable=False, index=True)
-    tier = Column(String(32), default="TIER_1")
-    owner = Column(String(128), default="Engineering")
+# Import and re-export ServiceDependency from auth models for backwards compatibility
+from backend.app.models.auth import ServiceDependency

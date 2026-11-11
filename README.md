@@ -13,8 +13,8 @@ RecallOps-AI bridges the gap between stateless AI triage and long-term productio
 | **1. Data Structures & Algorithms** | • **Vector Index & Cosine Similarity ($k$-NN):** In-memory TF-IDF sparse vector retrieval with thread-safe `RLock` synchronization.<br>• **Priority Queue (Max-Heap):** Dynamic triage prioritizing alerts by Severity, Service Tier, and User Impact.<br>• **Directed Acyclic Graph (DAG):** Downstream BFS blast-radius propagation and DFS cycle detection.<br>• **Prefix Trie:** $\mathcal{O}(L)$ log tokenization and error signature categorization. |
 | **2. API Integration** | • **FastAPI REST Endpoints:** Modular `/api/v1/` routes with dependency injection.<br>• **Production Webhook Adapters:** Native adapters for PagerDuty (v3 HMAC-SHA256 & v2), Datadog (token auth & tag parsing), and Prometheus Alertmanager (v4 grouped alerts).<br>• **Database Deduplication:** Idempotency tracking in `webhook_events` via unique constraint on `(provider, provider_event_id)`.<br>• **Durable Persistence:** SQLAlchemy ORM models with SQLite/PostgreSQL persistence and transactional rollback guarantees. |
 | **3. Prototyping** | • **Persistent Episodic Memory Lifecycle:** Ingestion $\rightarrow$ Triage $\rightarrow$ Multi-Modal Evidence $\rightarrow$ Real LLM Investigation $\rightarrow$ Engineer Approval $\rightarrow$ Database Persistence $\rightarrow$ Startup Rehydration.<br>• **Database-Driven Memory Seeding:** Grounded historical outages persisted in relational storage, not volatile RAM. |
-| **4. Testing & Validation** | • **67 Automated Tests:** Full test suite covering real LLM investigation, anti-hallucination validation, prompt injection defense, webhook authentication, idempotency, lifecycle transitions, persistence across server restarts, service recreation, duplicate handling, database failure handling, DSA, schemas, and lifecycle APIs.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
-| **5. Technical Documentation** | • **LLM Investigation Engine:** Architecture, evidence grounding, anti-hallucination, and security specifications in `docs/AI_INVESTIGATION_ENGINE.md`.<br>• **Webhook Architecture:** Complete provider security and normalization specifications in `docs/WEBHOOK_INTEGRATIONS.md`.<br>• **System Design:** Detailed architectural documentation, database persistence vs in-memory index design in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Comprehensive gap analysis and vulnerability review in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
+| **4. Testing & Validation** | • **92 Automated Tests:** Full test suite covering JWT authentication, Argon2id password security, RBAC role enforcement, multi-tenant isolation, persistent service topology across restarts, audit logging, real LLM investigation, anti-hallucination validation, prompt injection defense, webhook authentication, idempotency, lifecycle transitions, persistence across server restarts, service recreation, duplicate handling, database failure handling, DSA, schemas, and lifecycle APIs.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
+| **5. Technical Documentation** | • **Authentication & RBAC:** Multi-tenancy, JWT security, and persistent topology specifications in `docs/AUTHENTICATION_AND_RBAC.md`.<br>• **LLM Investigation Engine:** Architecture, evidence grounding, anti-hallucination, and security specifications in `docs/AI_INVESTIGATION_ENGINE.md`.<br>• **Webhook Architecture:** Complete provider security and normalization specifications in `docs/WEBHOOK_INTEGRATIONS.md`.<br>• **System Design:** Detailed architectural documentation, database persistence vs in-memory index design in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Comprehensive gap analysis and vulnerability review in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
 
 ---
 
@@ -137,10 +137,22 @@ RecallOps-AI/
 │   │   ├── api/v1/
 │   │   │   ├── endpoints/
 │   │   │   │   ├── health.py              # Healthcheck & degraded status reporting
+│   │   │   │   ├── auth.py                # JWT login, registration & profile
+│   │   │   │   ├── organizations.py       # Organization & member RBAC management
+│   │   │   │   ├── projects.py            # Organization-scoped project catalog
+│   │   │   │   ├── services.py            # Microservice definitions & dependencies
+│   │   │   │   ├── topology.py            # Persistent topology, blast radius & cycles
+│   │   │   │   ├── audit.py               # Security audit logging
 │   │   │   │   ├── incidents.py           # Ingestion, Triage, Diagnosis, Resolution
 │   │   │   │   ├── webhooks.py            # PagerDuty, Datadog, Alertmanager endpoints
 │   │   │   │   └── investigations.py      # LLM investigation & human feedback
 │   │   │   └── router.py                  # API V1 router aggregation
+│   │   ├── auth/                          # Authentication & RBAC engine
+│   │   │   ├── security.py                # Argon2id password hashing & strength validation
+│   │   │   ├── jwt.py                     # HS256 JWT creation & verification
+│   │   │   ├── dependencies.py            # User & OrganizationContext resolution
+│   │   │   ├── permissions.py             # Declarative require_admin/engineer/viewer
+│   │   │   └── schemas.py                 # Pydantic schemas for auth & memberships
 │   │   ├── core/
 │   │   │   ├── algorithms.py              # DSA: VectorIndex, Max-Heap, DAG, Trie (Thread-safe)
 │   │   │   └── config.py                  # Application settings (Pydantic Settings)
@@ -154,6 +166,7 @@ RecallOps-AI/
 │   │   │   ├── datadog/                   # Datadog adapter, schemas & token security
 │   │   │   └── alertmanager/              # Alertmanager adapter, schemas & auth
 │   │   ├── models/
+│   │   │   ├── auth.py                    # User, Org, Membership, Project, Service, AuditLog
 │   │   │   ├── incident.py                # Incident & Resolution ORM models
 │   │   │   ├── webhook_event.py           # Webhook event deduplication model
 │   │   │   └── investigation.py           # AI Investigation report model
@@ -164,6 +177,7 @@ RecallOps-AI/
 │   │   │   ├── incident.py                # Pydantic V2 schemas
 │   │   │   └── webhook.py                 # Webhook ingestion schemas
 │   │   ├── services/
+│   │   │   ├── audit_service.py           # Security audit logging & secret redaction
 │   │   │   ├── investigation_service.py   # AI Investigation orchestrator & feedback
 │   │   │   ├── evidence_service.py        # Multi-modal evidence collection engine
 │   │   │   ├── prompt_service.py          # Injection-safe SRE prompt builder
@@ -171,10 +185,11 @@ RecallOps-AI/
 │   │   │   ├── deduplication_service.py   # Idempotency tracking service
 │   │   │   ├── ai_agent_service.py        # Diagnostic & Runbook reasoning agent
 │   │   │   ├── memory_service.py          # Persistent episodic memory manager
-│   │   │   ├── topology_service.py        # Microservice dependency graph
+│   │   │   ├── topology_service.py        # Database-backed microservice topology
 │   │   │   └── triage_service.py          # Dynamic priority triage queue
 │   │   └── main.py                        # FastAPI app & database startup rehydration
 │   ├── tests/
+│   │   ├── test_auth_rbac.py              # JWT, Argon2id, RBAC & tenant isolation tests
 │   │   ├── test_investigation.py          # LLM engine, grounding & feedback tests
 │   │   ├── test_webhooks.py               # Vendor adapters & deduplication tests
 │   │   ├── test_persistent_memory.py      # Persistence & rehydration test suite
@@ -184,15 +199,12 @@ RecallOps-AI/
 │   │   └── test_schemas.py                # Pydantic boundary validation tests
 │   └── requirements.txt                   # Project dependencies
 ├── docs/
+│   ├── AUTHENTICATION_AND_RBAC.md         # Phase 4 Auth, RBAC & Topology Architecture
 │   ├── AI_INVESTIGATION_ENGINE.md         # Phase 3 LLM Investigation Engine
 │   ├── WEBHOOK_INTEGRATIONS.md            # Phase 2 Webhook Adapters
 │   ├── SYSTEM_DESIGN.md                   # Full System Design & Architecture
 │   ├── IMPLEMENTATION_AUDIT.md            # Reliability Audit & Gap Analysis
 │   └── API_REFERENCE.md                   # Complete API specification
-└── README.md
-│   ├── SYSTEM_DESIGN.md                   # In-depth architectural blueprint
-│   ├── IMPLEMENTATION_AUDIT.md            # Comprehensive audit & risk review
-│   └── API_REFERENCE.md                   # API specifications & curl examples
 ├── pytest.ini                             # Test runner configuration
 └── README.md                              # Project documentation
 ```

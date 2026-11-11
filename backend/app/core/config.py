@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     WEBHOOK_AUTH_REQUIRED: bool = True
     WEBHOOK_MAX_PAYLOAD_BYTES: int = 2 * 1024 * 1024  # 2 MB limit
     
+    # JWT & Authentication
+    JWT_SECRET_KEY: str = "recallops-dev-secret-key-change-in-production-12345678"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    PASSWORD_MIN_LENGTH: int = 8
+    
     # Operational Constants
     SIMILARITY_THRESHOLD: float = 0.15
     MAX_HISTORICAL_RECALL: int = 5

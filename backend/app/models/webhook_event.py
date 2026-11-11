@@ -17,6 +17,7 @@ class WebhookEvent(Base):
     received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     processed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     internal_incident_id = Column(String(64), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True)
+    organization_id = Column(String(64), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
     raw_payload_summary = Column(Text, nullable=True)               # Redacted JSON string
     error_message = Column(Text, nullable=True)
 

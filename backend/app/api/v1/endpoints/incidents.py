@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -19,15 +19,34 @@ from backend.app.services.memory_service import memory_service
 from backend.app.services.topology_service import topology_service
 from backend.app.services.triage_service import triage_service
 from backend.app.services.ai_agent_service import ai_agent
+from backend.app.services.audit_service import audit_service
+from backend.app.models.auth import OrganizationMembership
+from backend.app.auth.dependencies import get_optional_org_context
 
 router = APIRouter(prefix="/incidents", tags=["Incidents & Ops"])
 
 
+def _resolve_org(org_context: Any) -> Optional[OrganizationMembership]:
+    return org_context if isinstance(org_context, OrganizationMembership) else None
+
+
+def _resolve_db(db: Any) -> Optional[Session]:
+    return db if isinstance(db, Session) else None
+
+
 @router.post("", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
-def create_incident(incident_in: IncidentCreate, db: Session = Depends(get_db)):
+def create_incident(
+    incident_in: IncidentCreate,
+    db: Session = Depends(get_db),
+    org_context: Optional[OrganizationMembership] = Depends(get_optional_org_context)
+):
     """Creates a new incident, persists it, and enqueues into priority triage."""
+    org = _resolve_org(org_context)
+    org_id = org.organization_id if org else None
+    actor_id = org.user_id if org else None
+
     repo = IncidentRepository(db)
-    incident = repo.create(incident_in)
+    incident = repo.create(incident_in, organization_id=org_id)
     
     # Enqueue to priority triage queue
     triage_service.enqueue(
@@ -37,6 +56,18 @@ def create_incident(incident_in: IncidentCreate, db: Session = Depends(get_db)):
         service_tier=incident.service_tier,
         impacted_users=incident.impacted_users
     )
+
+    if org_id or actor_id:
+        audit_service.log(
+            db=db,
+            action="INCIDENT_CREATE",
+            resource_type="incident",
+            actor_user_id=actor_id,
+            organization_id=org_id,
+            resource_id=incident.id,
+            metadata={"title": incident.title, "service": incident.service_name, "severity": incident.severity}
+        )
+
     return incident
 
 
@@ -74,11 +105,19 @@ def list_incidents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     status: Optional[str] = Query(None, description="Filter by OPEN, INVESTIGATING, MITIGATED, RESOLVED"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    org_context: Optional[OrganizationMembership] = Depends(get_optional_org_context)
 ):
     """Lists all recorded incidents with pagination and status filters."""
+    org = _resolve_org(org_context)
+    org_id = org.organization_id if org else None
+
+    status_str = status if isinstance(status, str) else None
+    skip_int = skip if isinstance(skip, int) else 0
+    limit_int = limit if isinstance(limit, int) else 50
+
     repo = IncidentRepository(db)
-    return repo.list_all(skip=skip, limit=limit, status=status)
+    return repo.list_all(skip=skip_int, limit=limit_int, status=status_str, organization_id=org_id)
 
 
 @router.get("/triage/queue", response_model=List[TriageQueueItem])
@@ -88,12 +127,20 @@ def get_triage_queue():
 
 
 @router.get("/topology/blast-radius", response_model=BlastRadiusSummary)
-def get_blast_radius(service: str = Query(..., description="Service to analyze")):
+def get_blast_radius(
+    service: str = Query(..., description="Service to analyze"),
+    db: Session = Depends(get_db),
+    org_context: Optional[OrganizationMembership] = Depends(get_optional_org_context)
+):
     """
     Traverses the microservice dependency DAG to compute downstream blast radius
     and impact weight when a specific service fails.
     """
-    data = topology_service.get_blast_radius(service)
+    org = _resolve_org(org_context)
+    org_id = org.organization_id if org else None
+    actual_db = _resolve_db(db)
+
+    data = topology_service.get_blast_radius(service, organization_id=org_id, db=actual_db)
     return BlastRadiusSummary(**data)
 
 
@@ -121,17 +168,33 @@ def search_episodic_memory(
 
 
 @router.get("/{incident_id}", response_model=IncidentResponse)
-def get_incident(incident_id: str, db: Session = Depends(get_db)):
+def get_incident(
+    incident_id: str,
+    db: Session = Depends(get_db),
+    org_context: Optional[OrganizationMembership] = Depends(get_optional_org_context)
+):
     """Retrieves detailed incident information including resolution status."""
+    org = _resolve_org(org_context)
+    org_id = org.organization_id if org else None
+
     repo = IncidentRepository(db)
     incident = repo.get_by_id(incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+
+    # Strict multi-tenant isolation
+    if org_id and incident.organization_id and incident.organization_id != org_id:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+
     return incident
 
 
 @router.post("/{incident_id}/diagnose", response_model=DiagnosisResponse)
-def diagnose_incident(incident_id: str, db: Session = Depends(get_db)):
+def diagnose_incident(
+    incident_id: str,
+    db: Session = Depends(get_db),
+    org_context: Optional[OrganizationMembership] = Depends(get_optional_org_context)
+):
     """
     Runs the AI Agent on an incident:
     1. Parses raw logs through Prefix Trie to extract error codes.
@@ -139,9 +202,16 @@ def diagnose_incident(incident_id: str, db: Session = Depends(get_db)):
     3. Calculates downstream blast radius on the service dependency graph.
     4. Generates a prioritized diagnosis and safe remediation runbook.
     """
+    org = _resolve_org(org_context)
+    org_id = org.organization_id if org else None
+
     repo = IncidentRepository(db)
     incident = repo.get_by_id(incident_id)
     if not incident:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+
+    # Strict multi-tenant isolation
+    if org_id and incident.organization_id and incident.organization_id != org_id:
         raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
 
     repo.update_status(incident_id, "INVESTIGATING")
@@ -157,13 +227,36 @@ def diagnose_incident(incident_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{incident_id}/resolve", response_model=ResolutionResponse)
-def resolve_incident(incident_id: str, resolution_in: ResolutionCreate, db: Session = Depends(get_db)):
+def resolve_incident(
+    incident_id: str,
+    resolution_in: ResolutionCreate,
+    db: Session = Depends(get_db),
+    org_context: Optional[OrganizationMembership] = Depends(get_optional_org_context)
+):
     """
     Resolves an active incident, removes it from the triage queue,
     and indexes the verified resolution into the episodic vector memory
     to train future AI incident recall.
     """
+    org = _resolve_org(org_context)
+    org_id = org.organization_id if org else None
+
     repo = IncidentRepository(db)
+    incident = repo.get_by_id(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+
+    # Strict multi-tenant isolation
+    if org_id and incident.organization_id and incident.organization_id != org_id:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+
+    # RBAC check: Viewers cannot resolve incidents
+    if org and org.role == "VIEWER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires 'ENGINEER' role or higher. Your role: 'VIEWER'."
+        )
+
     resolution = repo.resolve(incident_id, resolution_in)
     if not resolution:
         raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
@@ -184,6 +277,17 @@ def resolve_incident(incident_id: str, resolution_in: ResolutionCreate, db: Sess
             prevention_steps=resolution.prevention_steps,
             raw_logs=incident.raw_logs,
             verified_by=resolution.verified_by
+        )
+
+    if org:
+        audit_service.log(
+            db=db,
+            action="INCIDENT_RESOLVE",
+            resource_type="incident",
+            actor_user_id=org.user_id,
+            organization_id=org.organization_id,
+            resource_id=incident_id,
+            metadata={"verified_by": resolution.verified_by, "root_cause": resolution.root_cause}
         )
 
     return resolution

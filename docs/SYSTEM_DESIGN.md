@@ -174,6 +174,12 @@ Alerts must not be processed purely First-In-First-Out (FIFO). A Sev-1 payment o
   * Webhook listener mapped to structured Incident models.
 * **Database & Persistence:**
   * Relational metadata persisted via SQLAlchemy with transactional isolation, rollback error handlers, and foreign key constraints between `incidents` and `incident_resolutions`.
+  * Multi-tenant data model with scoped isolation (`organizations`, `projects`, `services`, `service_dependencies`, `audit_logs`).
+* **Authentication, RBAC & Multi-Tenancy:**
+  * Stateless JWT authentication with Argon2id password hashing.
+  * Hierarchical RBAC: Admin (full control), Engineer (operational read-write), Viewer (read-only).
+  * Persistent microservice topology with BFS blast-radius calculation and DFS cycle detection across process restarts.
+  * Automated security audit logging with recursive credential redaction.
 
 ---
 
@@ -189,8 +195,8 @@ Alerts must not be processed purely First-In-First-Out (FIFO). A Sev-1 payment o
 ### Pillar 4: Testing & Validation
 
 * **Validation Strategy:**
-  * 100% test pass rate across 28 automated unit and integration tests.
-  * Dedicated persistence tests: Service recreation, full application restart on temporary databases, duplicate resolution handling, and database failure handling.
+  * 100% test pass rate across 92 automated unit and integration tests.
+  * Dedicated test suites covering persistent episodic memory, webhook deduplication & HMAC security, real LLM incident investigation, JWT authentication, Argon2id password hashing, RBAC role enforcement, persistent service topology across restarts, and security audit logging.
   * Algorithmic verification: Vector similarity ranking, heap priority monotonicity, BFS blast radius traversal, cycle detection.
   * Schema edge-case testing: Pydantic field constraint checks (negative user values, missing required fields).
 

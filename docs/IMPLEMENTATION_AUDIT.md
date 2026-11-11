@@ -231,8 +231,35 @@ flowchart TD
 | [`backend/app/services/ai_agent_service.py:82`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/services/ai_agent_service.py#L82) | `IncidentAIAgent.diagnose` | Enforces false 65% minimum confidence floor on low-similarity matches | **Design Flaw** |
 | [`backend/app/api/v1/endpoints/incidents.py:44`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/api/v1/endpoints/incidents.py#L44) | `ingest_webhook_alert` | Lacks HMAC verification, deduplication, and rejects standard vendor payloads | **Critical Flaw** |
 | [`backend/app/main.py:65`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/main.py#L65) | `CORSMiddleware` | Incompatible combination of wildcard origins and credentials | **Security Risk** |
-| [`backend/app/models/incident.py:40`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/models/incident.py#L40) | `ServiceDependency` | Orphaned model; table is created in SQLite but never used by service logic | **Dead Code** |
+| [`backend/app/models/incident.py:40`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/app/models/incident.py#L40) | `ServiceDependency` | Orphaned model; table is created in SQLite but never used by service logic | **Resolved in Phase 4** (Active persistent multi-tenant topology model) |
 | [`backend/tests/test_incidents_api.py:36`](file:///C:/Users/ANUSHREE%20R/RecallOps-AI/backend/tests/test_incidents_api.py#L36) | `test_create_incident_flow` | Bypasses HTTP layer; tests invoke controller functions directly | **Testing Gap** |
+
+---
+
+## 9. Implementation Progress & Resolution Log
+
+### Phase 1: Persistent Episodic Memory (Completed)
+- Startup DB rehydration from `IncidentResolution` verified records.
+- 28 passing tests.
+
+### Phase 2: Webhook Security & Idempotency (Completed)
+- PagerDuty (v2/v3 HMAC), Datadog, Prometheus Alertmanager adapters.
+- Database idempotency via `WebhookEvent` unique constraint.
+- 49 passing tests.
+
+### Phase 3: Real LLM Investigation Engine (Completed)
+- Provider-agnostic LLM investigation engine (OpenAI & Mock providers).
+- Structured JSON outputs, anti-hallucination citation validation, prompt injection defense.
+- Persistent `investigations` table and human-in-the-loop verification loop.
+- 67 passing tests.
+
+### Phase 4: Authentication, RBAC & Persistent Topology (Completed)
+- **JWT & Password Security**: Argon2id password hashing and HS256 JWT access tokens.
+- **Hierarchical RBAC**: Reusable declarative FastAPI dependencies enforcing `Admin`, `Engineer`, and `Viewer` role privileges.
+- **Multi-Tenant Isolation**: Scoped organization boundaries on incidents, investigations, projects, services, and topologies. Cross-tenant queries return 404/403.
+- **Persistent Service Topology**: Replaced in-memory only graph with database persistence on `services` and `service_dependencies`. BFS blast radius and DFS cycle detection operate across restarts.
+- **Security Audit Logging**: Comprehensive audit trail with recursive credential scrubbing (`[REDACTED]`).
+- **Test Coverage**: 92 passing automated tests with zero regressions.
 
 ---
 

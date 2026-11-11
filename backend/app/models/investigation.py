@@ -9,6 +9,7 @@ class Investigation(Base):
 
     id = Column(String(64), primary_key=True, index=True)
     incident_id = Column(String(64), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(String(64), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True)
     provider = Column(String(32), nullable=False, default="openai")
     model_name = Column(String(64), nullable=False, default="gpt-4o-mini")
     summary = Column(Text, nullable=True)
