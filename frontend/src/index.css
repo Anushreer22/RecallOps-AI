@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light dark;
+  }
+
+  body {
+    @apply bg-surface-100 text-surface-900 dark:bg-surface-950 dark:text-surface-100 font-sans antialiased selection:bg-brand-500/30 selection:text-brand-300 min-h-screen;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* Custom smooth scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-surface-300 dark:bg-surface-700 rounded-full hover:bg-surface-400 dark:hover:bg-surface-600;
+}

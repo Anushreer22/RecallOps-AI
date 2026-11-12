@@ -13,8 +13,8 @@ RecallOps-AI bridges the gap between stateless AI triage and long-term productio
 | **1. Data Structures & Algorithms** | • **Vector Index & Cosine Similarity ($k$-NN):** In-memory TF-IDF sparse vector retrieval with thread-safe `RLock` synchronization.<br>• **Priority Queue (Max-Heap):** Dynamic triage prioritizing alerts by Severity, Service Tier, and User Impact.<br>• **Directed Acyclic Graph (DAG):** Downstream BFS blast-radius propagation and DFS cycle detection.<br>• **Prefix Trie:** $\mathcal{O}(L)$ log tokenization and error signature categorization. |
 | **2. API Integration** | • **FastAPI REST Endpoints:** Modular `/api/v1/` routes with dependency injection.<br>• **Production Webhook Adapters:** Native adapters for PagerDuty (v3 HMAC-SHA256 & v2), Datadog (token auth & tag parsing), and Prometheus Alertmanager (v4 grouped alerts).<br>• **Database Deduplication:** Idempotency tracking in `webhook_events` via unique constraint on `(provider, provider_event_id)`.<br>• **Durable Persistence:** SQLAlchemy ORM models with SQLite/PostgreSQL persistence and transactional rollback guarantees. |
 | **3. Prototyping** | • **Persistent Episodic Memory Lifecycle:** Ingestion $\rightarrow$ Triage $\rightarrow$ Multi-Modal Evidence $\rightarrow$ Real LLM Investigation $\rightarrow$ Engineer Approval $\rightarrow$ Database Persistence $\rightarrow$ Startup Rehydration.<br>• **Database-Driven Memory Seeding:** Grounded historical outages persisted in relational storage, not volatile RAM. |
-| **4. Testing & Validation** | • **92 Automated Tests:** Full test suite covering JWT authentication, Argon2id password security, RBAC role enforcement, multi-tenant isolation, persistent service topology across restarts, audit logging, real LLM investigation, anti-hallucination validation, prompt injection defense, webhook authentication, idempotency, lifecycle transitions, persistence across server restarts, service recreation, duplicate handling, database failure handling, DSA, schemas, and lifecycle APIs.<br>• **Pydantic V2:** Runtime boundary validation and type safety. |
-| **5. Technical Documentation** | • **Authentication & RBAC:** Multi-tenancy, JWT security, and persistent topology specifications in `docs/AUTHENTICATION_AND_RBAC.md`.<br>• **LLM Investigation Engine:** Architecture, evidence grounding, anti-hallucination, and security specifications in `docs/AI_INVESTIGATION_ENGINE.md`.<br>• **Webhook Architecture:** Complete provider security and normalization specifications in `docs/WEBHOOK_INTEGRATIONS.md`.<br>• **System Design:** Detailed architectural documentation, database persistence vs in-memory index design in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Comprehensive gap analysis and vulnerability review in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete endpoint documentation in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
+| **4. Testing & Validation** | • **107 Total Automated Tests:** 92 backend tests + 15 frontend tests with 100% pass rate.<br>• **Backend:** JWT authentication, Argon2id security, RBAC hierarchy, tenant isolation, persistent topology, audit logging, real LLM investigation, anti-hallucination validation, prompt injection defense, webhook deduplication, and episodic memory persistence across server restarts.<br>• **Frontend:** Vitest + React Testing Library suites validating authentication, RBAC UI restrictions, incident lifecycle, priority triage queue, grounded AI investigations, and interactive topology blast radius.<br>• **Pydantic V2 & TypeScript:** Full runtime boundary validation and compile-time type safety. |
+| **5. Technical Documentation** | • **Frontend Architecture:** Component hierarchy, state, and design tokens in `docs/FRONTEND_ARCHITECTURE.md`.<br>• **Frontend Setup:** Quick start guide in `docs/FRONTEND_SETUP.md`.<br>• **Authentication & RBAC:** Multi-tenancy, JWT security, and persistent topology specifications in `docs/AUTHENTICATION_AND_RBAC.md`.<br>• **LLM Investigation Engine:** Architecture, evidence grounding, and anti-hallucination specifications in `docs/AI_INVESTIGATION_ENGINE.md`.<br>• **Webhook Architecture:** Complete provider security and normalization specifications in `docs/WEBHOOK_INTEGRATIONS.md`.<br>• **System Design:** Detailed architectural documentation in `docs/SYSTEM_DESIGN.md`.<br>• **Implementation Audit:** Gap analysis in `docs/IMPLEMENTATION_AUDIT.md`.<br>• **API Reference:** Complete API specification in `docs/API_REFERENCE.md`.<br>• **Interactive Swagger Docs:** Accessible at `/docs`. |
 
 ---
 
@@ -198,7 +198,20 @@ RecallOps-AI/
 │   │   ├── test_incidents_api.py          # Lifecycle integration tests
 │   │   └── test_schemas.py                # Pydantic boundary validation tests
 │   └── requirements.txt                   # Project dependencies
+├── frontend/                              # Modern React 18 + Vite SPA
+│   ├── src/
+│   │   ├── api/                           # Axios client with JWT & tenant headers
+│   │   ├── components/layout/             # Sidebar, TopBar with tenant selector, AppLayout
+│   │   ├── components/ui/                 # Design system (Card, Badge, Button, Modal, etc.)
+│   │   ├── context/                       # AuthContext (RBAC) & ThemeContext
+│   │   ├── pages/                         # Dashboard, Incidents, Investigations, Topology, etc.
+│   │   ├── test/                          # Vitest unit and integration test suite
+│   │   └── types/                         # TypeScript domain models and enums
+│   ├── package.json                       # React 18, Vite 5, Tailwind 3, Vitest, @xyflow/react
+│   └── vite.config.ts                     # Dev server with /api proxy to FastAPI
 ├── docs/
+│   ├── FRONTEND_ARCHITECTURE.md           # Phase 5 Frontend Component & System Design
+│   ├── FRONTEND_SETUP.md                  # Phase 5 Setup & Quick Start Guide
 │   ├── AUTHENTICATION_AND_RBAC.md         # Phase 4 Auth, RBAC & Topology Architecture
 │   ├── AI_INVESTIGATION_ENGINE.md         # Phase 3 LLM Investigation Engine
 │   ├── WEBHOOK_INTEGRATIONS.md            # Phase 2 Webhook Adapters
@@ -208,3 +221,44 @@ RecallOps-AI/
 ├── pytest.ini                             # Test runner configuration
 └── README.md                              # Project documentation
 ```
+
+---
+
+## 🚀 Quick Start Guide
+
+### 1. Backend Setup & Startup
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# Run all 92 automated backend tests
+pytest -v
+
+# Start FastAPI backend (port 8000)
+uvicorn backend.app.main:app --reload --port 8000
+```
+
+### 2. Frontend Setup & Startup
+
+```bash
+cd frontend
+pnpm install
+
+# Run all 15 automated frontend tests
+pnpm test
+
+# Run TypeScript compile validation
+pnpm typecheck
+
+# Build optimized production bundle
+pnpm build
+
+# Start local development server (port 3000)
+pnpm dev
+```
+
+Visit `http://localhost:3000` to interact with the full SaaS operations platform.
+
